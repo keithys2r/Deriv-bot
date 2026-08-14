@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Deriv Bot Dashboard</title>
+  <style>
+    body { font-family: sans-serif; background: #0f0f0f; color: white; text-align: center; padding: 30px; }
+    .card { background: #1e1e1e; padding: 20px; border-radius: 15px; max-width: 500px; margin: 20px auto; }
+    button { padding: 12px 25px; margin: 10px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+    .start { background: #00ff88; }
+    .stop { background: #ff4444; color: white; }
+    #logs { background: black; color: #00ff88; text-align: left; padding: 15px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>🤖 Deriv Bot v2</h1>
+  <div class="card">
+    <h3>Status: <span id="status">STOPPED</span></h3>
+    <button class="start" onclick="startBot()">START BOT</button>
+    <button class="stop" onclick="stopBot()">STOP BOT</button>
+    <h4>Live Logs</h4>
+    <div id="logs">Waiting to start...</div>
+  </div>
+
+<script>
+  async function startBot() {
+    document.getElementById('status').innerText = 'RUNNING...';
+    document.getElementById('logs').innerHTML += '<br>> Starting driver...';
+    // This will call our backend later
+    let res = await fetch('/.netlify/functions/driver');
+    let data = await res.json();
+    document.getElementById('logs').innerHTML += '<br>> ' + data.message;
+  }
+  function stopBot() {
+    document.getElementById('status').innerText = 'STOPPED';
+    document.getElementById('logs').innerHTML += '<br>> Stopped by user';
+  }
+</script>
+</body>
+</html>
