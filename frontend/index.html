@@ -28,7 +28,7 @@
     // This will call our backend later
     let res = await fetch('/.netlify/functions/driver');
     let data = await res.json();
-    document.getElementById('logs').innerHTML += '<br>> ' + data.message;
+    document.getElementById('logs').innerHTML += '<br>> ' + JSON.stringify(data);
   }
   function stopBot() {
     document.getElementById('status').innerText = 'STOPPED';
