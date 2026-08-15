@@ -177,11 +177,9 @@ async function getOtpWebSocketUrl(token, app_id) {
   }
 
   // Try to find a demo/virtual account first
-  const demoAccount = accounts.find(
-    (a) => a.isDemo === true || a.is_virtual === true || a.type === 'demo' || a.accountType === 'demo'
-  ) || accounts[0];
+  const demoAccount = accounts.find((a) => a.account_type === 'demo') || accounts[0];
 
-  const accountId = demoAccount.accountId || demoAccount.id || demoAccount.loginid;
+  const accountId = demoAccount.account_id;
   if (!accountId) {
     throw new Error('Could not determine account ID from: ' + JSON.stringify(demoAccount));
   }
