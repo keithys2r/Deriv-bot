@@ -81,11 +81,24 @@ async function alertEODReport(strategyName, state) {
   );
 }
 
+async function alertTradeResult(strategyName, direction, symbol, stake, won, profit) {
+  const resultEmoji = won ? EMOJI_CHECK : EMOJI_STOP;
+  const resultText = won ? 'WON' : 'LOST';
+  return sendMessage(
+    `${resultEmoji} ${resultText}\n` +
+    `Strategy: <b>${strategyName}</b>\n` +
+    `${direction} on ${symbol}\n` +
+    `Stake: $${stake.toFixed(2)}\n` +
+    `${resultText === 'WON' ? 'Profit' : 'Loss'}: $${Math.abs(profit).toFixed(2)}`
+  );
+}
+
 module.exports = {
   sendMessage,
   alertBotStarted,
   alertPaused,
   alertDailyGoalHit,
   alertStopLossHit,
-  alertEODReport
+  alertEODReport,
+  alertTradeResult
 };
