@@ -833,12 +833,17 @@
     })
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        if (data.error) {
+          note.textContent = data.error;
+          return;
+        }
         currentSettings = data.settings;
         renderSettings(data.settings, Object.keys(SYMBOL_LABELS));
         note.textContent = 'Saved - takes effect on the next run (within 1 min).';
       })
-      .catch(function() {
-        note.textContent = 'Save failed - try again.';
+      .catch(function(err) {
+        note.textContent = 'Save failed - check your connection and try again.';
+        console.error('Settings save error:', err);
       });
   });
 
