@@ -4,5 +4,6 @@
 
 [functions]
   node_bundler = "esbuild"
+
 [functions."driver"]
   schedule = "*/1 * * * *"
