@@ -554,6 +554,9 @@
         <input type="checkbox" id="rsiConfirmInput" checked>
         <label for="rsiConfirmInput">Require RSI confirmation on crossover (uncheck to fire on EMA crossover alone - more trades, less filtering)</label>
       </div>
+      <p class="settings-section-label" style="margin-top:14px;">Candle timeframe (seconds)</p>
+      <input type="number" id="granularityInput" min="5" max="60" step="5" value="15">
+      <p class="settings-note" style="text-align:left;margin-top:6px;">Custom candles built from raw ticks - Deriv's own candles bottom out at 60s. Lower = catches faster moves, but noisier.</p>
     </div>
 
     <div id="digitSettings" style="display:none;">
@@ -849,6 +852,7 @@
     document.getElementById('rsiOverboughtInput').value = settings.rsiOverbought;
     document.getElementById('rsiOversoldInput').value = settings.rsiOversold;
     document.getElementById('rsiConfirmInput').checked = settings.requireRsiConfirmation !== false;
+    document.getElementById('granularityInput').value = settings.candleGranularitySeconds || 15;
     document.getElementById('digitLookbackInput').value = settings.digitLookback || 20;
     document.getElementById('profitGoalInput').value = settings.dailyProfitGoal;
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
@@ -912,6 +916,7 @@
       rsiOverbought: parseInt(document.getElementById('rsiOverboughtInput').value),
       rsiOversold: parseInt(document.getElementById('rsiOversoldInput').value),
       requireRsiConfirmation: document.getElementById('rsiConfirmInput').checked,
+      candleGranularitySeconds: parseInt(document.getElementById('granularityInput').value),
       digitLookback: parseInt(document.getElementById('digitLookbackInput').value),
       dailyProfitGoal: parseFloat(document.getElementById('profitGoalInput').value),
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
