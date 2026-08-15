@@ -22,7 +22,6 @@ const { getOtpWebSocketUrl } = require('./deriv-auth');
 
 // ---- Config ----
 const CANDLE_GRANULARITY = 60; // 1-minute candles (rise/fall)
-const CANDLE_COUNT = 50;
 const RISE_FALL_DURATION = 5; // ticks
 const RISE_FALL_DURATION_UNIT = 't';
 const DIGIT_DURATION = 1; // ticks
@@ -70,7 +69,11 @@ async function runRiseFallStrategy(token, app_id, settings) {
   const symbol = settings.symbol;
 
   const candleAuth = await getOtpWebSocketUrl(token, app_id);
-  const candles = await connectAndGetCandles(candleAuth.wsUrl, symbol);
+  // Fetch enough candles to cover whatever periods are currently
+  // configured, plus a buffer - a fixed count would silently break
+  // the strategy if the user sets a longer EMA/RSI period than that.
+  const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
+  const candles = await connectAndGetCandles(candleAuth.wsUrl, symbol, neededCandles);
   const closes = candles.map((c) => c.close ?? c.Close ?? c[4]);
 
   const signalResult = riseFallStrategy.getSignal(closes, {
@@ -285,7 +288,7 @@ async function maybeSendEODReport(strategyName) {
   }
 }
 
-function connectAndGetCandles(wsUrl, symbol) {
+function connectAndGetCandles(wsUrl, symbol, count) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     let resolved = false;
@@ -303,7 +306,7 @@ function connectAndGetCandles(wsUrl, symbol) {
         ticks_history: symbol,
         style: 'candles',
         granularity: CANDLE_GRANULARITY,
-        count: CANDLE_COUNT,
+        count: count,
         end: 'latest'
       }));
     };
