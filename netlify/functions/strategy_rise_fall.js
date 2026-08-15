@@ -152,7 +152,9 @@ function getSignal(closes, params) {
 
   return {
     signal: null,
-    reason: 'No fresh crossover with RSI confirmation this candle',
+    reason: requireRsiConfirmation
+      ? 'No fresh crossover with RSI confirmation this candle'
+      : 'No fresh EMA crossover this candle',
     details
   };
 }
