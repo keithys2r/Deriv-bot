@@ -1,5 +1,7 @@
 {
   "name": "deriv-bot",
   "version": "1.0.0",
-  "dependencies": {}
+  "dependencies": {
+    "@netlify/blobs": "^7.0.0"
+  }
 }
