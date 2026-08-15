@@ -1,21 +1,21 @@
 // risk.js
 // Decides whether the bot is ALLOWED to place a trade right now.
-// Reads state from memory.js, never writes trade outcomes itself —
-// memory.js owns writing. risk.js only reads + decides + can set pause.
+// Reads BOTH state (from memory.js) and user-configured settings
+// (profit goal, stop loss, max losses, cooldown) - these are no longer
+// hardcoded, the user sets them from the dashboard Settings panel.
 
 const memory = require('./memory');
-
-// ---- Your risk rules live here, change these numbers as you like ----
-const DAILY_PROFIT_GOAL = 20;      // stop trading for the day once hit
-const DAILY_STOP_LOSS = 15;        // stop trading for the day once hit
-const MAX_CONSECUTIVE_LOSSES = 3;  // triggers a cooldown pause
-const COOLDOWN_MINUTES = 15;       // how long the pause lasts
-// ------------------------------------------------------------------
 
 // Returns { canTrade: boolean, reason: string, state: {...} }
 async function checkCanTrade(strategyName) {
   const state = await memory.loadState(strategyName);
+  const settings = await memory.loadSettings();
   const now = new Date();
+
+  const dailyProfitGoal = settings.dailyProfitGoal;
+  const dailyStopLoss = settings.dailyStopLoss;
+  const maxConsecutiveLosses = settings.maxConsecutiveLosses;
+  const cooldownMinutes = settings.cooldownMinutes;
 
   // 0. Manual pause - user hit STOP on the frontend, overrides everything else
   if (state.manualPause) {
@@ -32,11 +32,10 @@ async function checkCanTrade(strategyName) {
     if (now < pausedUntil) {
       return {
         canTrade: false,
-        reason: `Paused until ${pausedUntil.toISOString()} (cooldown after ${MAX_CONSECUTIVE_LOSSES} losses)`,
+        reason: `Paused until ${pausedUntil.toISOString()} (cooldown after ${maxConsecutiveLosses} losses)`,
         state
       };
     } else {
-      // Cooldown expired, clear the pause
       state.paused = false;
       state.pausedUntil = null;
       await memory.saveState(strategyName, state);
@@ -44,37 +43,36 @@ async function checkCanTrade(strategyName) {
   }
 
   // 2. Check daily profit goal
-  if (state.dailyProfit >= DAILY_PROFIT_GOAL) {
+  if (state.dailyProfit >= dailyProfitGoal) {
     return {
       canTrade: false,
-      reason: `Daily profit goal hit ($${state.dailyProfit.toFixed(2)} >= $${DAILY_PROFIT_GOAL})`,
+      reason: `Daily profit goal hit ($${state.dailyProfit.toFixed(2)} >= $${dailyProfitGoal})`,
       state
     };
   }
 
   // 3. Check daily stop loss
-  if (state.dailyLoss >= DAILY_STOP_LOSS) {
+  if (state.dailyLoss >= dailyStopLoss) {
     return {
       canTrade: false,
-      reason: `Daily stop loss hit ($${state.dailyLoss.toFixed(2)} >= $${DAILY_STOP_LOSS})`,
+      reason: `Daily stop loss hit ($${state.dailyLoss.toFixed(2)} >= $${dailyStopLoss})`,
       state
     };
   }
 
   // 4. Check consecutive losses -> trigger new cooldown
-  if (state.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
-    const pausedUntil = new Date(now.getTime() + COOLDOWN_MINUTES * 60 * 1000);
+  if (state.consecutiveLosses >= maxConsecutiveLosses) {
+    const pausedUntil = new Date(now.getTime() + cooldownMinutes * 60 * 1000);
     state.paused = true;
     state.pausedUntil = pausedUntil.toISOString();
     await memory.saveState(strategyName, state);
     return {
       canTrade: false,
-      reason: `${MAX_CONSECUTIVE_LOSSES} consecutive losses hit -> cooldown started until ${pausedUntil.toISOString()}`,
+      reason: `${maxConsecutiveLosses} consecutive losses hit -> cooldown started until ${pausedUntil.toISOString()}`,
       state
     };
   }
 
-  // All checks passed
   return {
     canTrade: true,
     reason: 'All risk checks passed',
@@ -83,9 +81,5 @@ async function checkCanTrade(strategyName) {
 }
 
 module.exports = {
-  checkCanTrade,
-  DAILY_PROFIT_GOAL,
-  DAILY_STOP_LOSS,
-  MAX_CONSECUTIVE_LOSSES,
-  COOLDOWN_MINUTES
+  checkCanTrade
 };
