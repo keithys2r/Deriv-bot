@@ -1,13 +1,23 @@
 // driver.js
 // Scheduled function - Netlify triggers this automatically on a timer.
+//
+// Rebuilt for Deriv's NEW API (developers.deriv.com), not the old
+// ws.derivws.com/websockets/v3 "authorize" flow. New auth works like this:
+//   1. GET /trading/v1/options/accounts  (Bearer token) -> list of accounts
+//   2. POST /trading/v1/options/accounts/{accountId}/otp (Bearer token)
+//      -> a one-time-use WebSocket URL (OTP valid 120 seconds, single use)
+//   3. Connect directly to that URL - no further auth message needed
+//
+// Because the OTP is single-use, we request a FRESH one for the candle
+// fetch, and another FRESH one for the trade placement.
+//
 // Flow each run:
-//   1. Connect + authorize to Deriv
-//   2. Pull recent candle history
-//   3. Ask strategy_rise_fall.js for a signal
-//   4. If signal exists, ask risk.js if we're allowed to trade
-//   5. If allowed, place the trade and wait for the result (short duration contract)
-//   6. Record the outcome in memory.js
-//   7. Send Telegram alerts for pause / goal / stop-loss / EOD report
+//   1. Get candles via a new OTP connection
+//   2. Ask strategy_rise_fall.js for a signal
+//   3. If signal exists, ask risk.js if we're allowed to trade
+//   4. If allowed, get a fresh OTP, place the trade, wait for it to settle
+//   5. Record the outcome in memory.js
+//   6. Send Telegram alerts for pause / goal / stop-loss / EOD report
 //
 // IMPORTANT: Test with your DEMO token only until you've watched this
 // run for real over several days. Do not point this at a real-money
@@ -27,16 +37,14 @@ const CANDLE_COUNT = 50; // how many candles of history to pull
 const CONTRACT_DURATION = 5; // ticks
 const CONTRACT_DURATION_UNIT = 't';
 const EOD_HOUR_UTC = 23; // hour (0-23, UTC) to send end-of-day report
+const API_BASE = 'https://api.derivws.com';
 // -----------------
 
 exports.handler = async function () {
   const token = process.env.DERIV_TOKEN;
   const app_id = process.env.APP_ID || '1089';
 
-  // TEMPORARY DEBUG - remove after diagnosing the invalid token issue
   console.log('DEBUG token length:', token ? token.length : 'undefined');
-  console.log('DEBUG token first 6 chars:', token ? token.slice(0, 6) : 'undefined');
-  console.log('DEBUG token last 4 chars:', token ? token.slice(-4) : 'undefined');
   console.log('DEBUG app_id:', app_id);
 
   if (!token) {
@@ -45,11 +53,12 @@ exports.handler = async function () {
   }
 
   try {
-    // Step 1 + 2: connect, authorize, pull candles
-    const candles = await connectAndGetCandles(token, app_id);
-    const closes = candles.map((c) => c.close);
+    // Step 1: fresh OTP + candles
+    const candleWsUrl = await getOtpWebSocketUrl(token, app_id);
+    const candles = await connectAndGetCandles(candleWsUrl);
+    const closes = candles.map((c) => c.close ?? c.Close ?? c[4]);
 
-    // Step 3: get signal
+    // Step 2: get signal
     const signalResult = strategy.getSignal(closes);
     console.log('Signal check:', signalResult.reason);
 
@@ -58,13 +67,12 @@ exports.handler = async function () {
       return respond({ message: 'No trade signal this run', ...signalResult });
     }
 
-    // Step 4: risk check
+    // Step 3: risk check
     const riskCheck = await risk.checkCanTrade(STRATEGY_NAME);
 
     if (!riskCheck.canTrade) {
       console.log('Blocked by risk.js:', riskCheck.reason);
 
-      // Only alert on pause/stop events, not every single blocked poll
       if (riskCheck.reason.includes('cooldown started')) {
         await telegram.alertPaused(STRATEGY_NAME, riskCheck.reason);
       } else if (riskCheck.reason.includes('profit goal hit')) {
@@ -77,23 +85,24 @@ exports.handler = async function () {
       return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
     }
 
-    // Step 5: place the trade and wait for result
+    // Step 4: fresh OTP for trade, place it, wait for result
     const stake = parseFloat(process.env.STAKE_AMOUNT || '1');
-    const tradeResult = await placeTradeAndWait(token, app_id, signalResult.signal, stake);
+    const tradeWsUrl = await getOtpWebSocketUrl(token, app_id);
+    const tradeResult = await placeTradeAndWait(tradeWsUrl, signalResult.signal, stake);
 
     if (tradeResult.error) {
       console.log('Trade execution error:', tradeResult.error);
       return respond({ message: 'Trade failed to execute', error: tradeResult.error });
     }
 
-    // Step 6: record outcome
+    // Step 5: record outcome
     const updatedState = await memory.recordTrade(STRATEGY_NAME, {
       won: tradeResult.won,
       profitOrLoss: tradeResult.profit,
       stake
     });
 
-    // Step 7: post-trade goal/stop check + alert
+    // Step 6: post-trade goal/stop check + alert
     const postTradeRisk = await risk.checkCanTrade(STRATEGY_NAME);
     if (!postTradeRisk.canTrade) {
       if (postTradeRisk.reason.includes('profit goal hit')) {
@@ -127,8 +136,6 @@ function respond(body) {
   };
 }
 
-// Sends the EOD report once per day, at/after EOD_HOUR_UTC.
-// Uses a flag stored in memory state so it doesn't fire every run.
 async function maybeSendEODReport() {
   const state = await memory.loadState(STRATEGY_NAME);
   const now = new Date();
@@ -140,11 +147,64 @@ async function maybeSendEODReport() {
   }
 }
 
-// Connects to Deriv, authorizes, and requests recent candle history.
-// Returns an array of { open, high, low, close, epoch }.
-function connectAndGetCandles(token, app_id) {
+// ---- New API auth: accounts -> OTP -> WebSocket URL ----
+async function getOtpWebSocketUrl(token, app_id) {
+  const accountsRes = await fetch(`${API_BASE}/trading/v1/options/accounts`, {
+    headers: {
+      'Deriv-App-ID': app_id,
+      'Authorization': `Bearer ${token}`
+    }
+  });
+  const accountsData = await accountsRes.json();
+  console.log('DEBUG accounts response:', JSON.stringify(accountsData).slice(0, 500));
+
+  if (!accountsRes.ok) {
+    throw new Error('Accounts fetch failed: ' + JSON.stringify(accountsData.errors || accountsData));
+  }
+
+  const accounts = accountsData.data || accountsData.accounts || [];
+  if (!accounts.length) {
+    throw new Error('No accounts returned from Deriv: ' + JSON.stringify(accountsData));
+  }
+
+  // Try to find a demo/virtual account first
+  const demoAccount = accounts.find(
+    (a) => a.isDemo === true || a.is_virtual === true || a.type === 'demo' || a.accountType === 'demo'
+  ) || accounts[0];
+
+  const accountId = demoAccount.accountId || demoAccount.id || demoAccount.loginid;
+  if (!accountId) {
+    throw new Error('Could not determine account ID from: ' + JSON.stringify(demoAccount));
+  }
+
+  console.log('DEBUG using accountId:', accountId, 'raw account:', JSON.stringify(demoAccount).slice(0, 300));
+
+  const otpRes = await fetch(`${API_BASE}/trading/v1/options/accounts/${accountId}/otp`, {
+    method: 'POST',
+    headers: {
+      'Deriv-App-ID': app_id,
+      'Authorization': `Bearer ${token}`
+    }
+  });
+  const otpData = await otpRes.json();
+  console.log('DEBUG otp response:', JSON.stringify(otpData).slice(0, 300));
+
+  if (!otpRes.ok) {
+    throw new Error('OTP fetch failed: ' + JSON.stringify(otpData.errors || otpData));
+  }
+
+  const wsUrl = (otpData.data && otpData.data.url) || otpData.url;
+  if (!wsUrl) {
+    throw new Error('No WebSocket URL in OTP response: ' + JSON.stringify(otpData));
+  }
+
+  return wsUrl;
+}
+
+// Connects using an OTP-embedded URL (already authenticated) and requests candles.
+function connectAndGetCandles(wsUrl) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${app_id}`);
+    const ws = new WebSocket(wsUrl);
     let resolved = false;
 
     const timeout = setTimeout(() => {
@@ -156,7 +216,13 @@ function connectAndGetCandles(token, app_id) {
     }, 8000);
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ authorize: token }));
+      ws.send(JSON.stringify({
+        ticks_history: SYMBOL,
+        style: 'candles',
+        granularity: CANDLE_GRANULARITY,
+        count: CANDLE_COUNT,
+        end: 'latest'
+      }));
     };
 
     ws.onmessage = (event) => {
@@ -170,21 +236,11 @@ function connectAndGetCandles(token, app_id) {
         return;
       }
 
-      if (res.msg_type === 'authorize') {
-        ws.send(JSON.stringify({
-          ticks_history: SYMBOL,
-          style: 'candles',
-          granularity: CANDLE_GRANULARITY,
-          count: CANDLE_COUNT,
-          end: 'latest'
-        }));
-      }
-
       if (res.msg_type === 'candles') {
         clearTimeout(timeout);
         resolved = true;
         ws.close();
-        resolve(res.candles || []);
+        resolve(res.candles || (res.data && res.data.candles) || []);
       }
     };
 
@@ -198,14 +254,12 @@ function connectAndGetCandles(token, app_id) {
   });
 }
 
-// Places a CALL or PUT contract and waits for it to settle, since
-// duration is short (ticks-based), this resolves within the function's
-// execution window instead of needing a separate check-later step.
-function placeTradeAndWait(token, app_id, direction, stake) {
+// Places a CALL or PUT contract using an OTP-embedded URL and waits for settlement.
+// NOTE: 'symbol' is renamed to 'underlying_symbol' on the new API's buy/proposal calls.
+function placeTradeAndWait(wsUrl, direction, stake) {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${app_id}`);
+    const ws = new WebSocket(wsUrl);
     let resolved = false;
-    let contractId = null;
 
     const timeout = setTimeout(() => {
       if (!resolved) {
@@ -216,7 +270,19 @@ function placeTradeAndWait(token, app_id, direction, stake) {
     }, 20000);
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ authorize: token }));
+      ws.send(JSON.stringify({
+        buy: 1,
+        price: stake,
+        parameters: {
+          contract_type: direction, // 'CALL' or 'PUT'
+          underlying_symbol: SYMBOL,
+          duration: CONTRACT_DURATION,
+          duration_unit: CONTRACT_DURATION_UNIT,
+          basis: 'stake',
+          amount: stake,
+          currency: 'USD'
+        }
+      }));
     };
 
     ws.onmessage = (event) => {
@@ -230,25 +296,8 @@ function placeTradeAndWait(token, app_id, direction, stake) {
         return;
       }
 
-      if (res.msg_type === 'authorize') {
-        ws.send(JSON.stringify({
-          buy: 1,
-          price: stake,
-          parameters: {
-            contract_type: direction, // 'CALL' or 'PUT'
-            symbol: SYMBOL,
-            duration: CONTRACT_DURATION,
-            duration_unit: CONTRACT_DURATION_UNIT,
-            basis: 'stake',
-            amount: stake,
-            currency: 'USD'
-          }
-        }));
-      }
-
       if (res.msg_type === 'buy') {
-        contractId = res.buy.contract_id;
-        // Subscribe to contract updates so we know when it settles
+        const contractId = res.buy.contract_id;
         ws.send(JSON.stringify({
           proposal_open_contract: 1,
           contract_id: contractId,
