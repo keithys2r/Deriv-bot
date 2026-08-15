@@ -435,9 +435,16 @@ function placeContractAndWait(wsUrl, parameters, stake) {
           clearTimeout(timeout);
           resolved = true;
           ws.close();
+
+          // Guard against Deriv occasionally returning a settled contract
+          // without a usable profit field - better to flag it than let
+          // a bad value corrupt the running P&L total silently.
+          const rawProfit = contract.profit;
+          const profit = Number.isFinite(rawProfit) ? rawProfit : (contract.sell_price - contract.buy_price);
+
           resolve({
-            won: contract.profit > 0,
-            profit: contract.profit,
+            won: profit > 0,
+            profit: Number.isFinite(profit) ? profit : 0,
             contractId: contract.contract_id,
             buyPrice: contract.buy_price,
             sellPrice: contract.sell_price
