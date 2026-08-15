@@ -79,6 +79,9 @@ exports.handler = async function (event) {
       if (body.rsiOverbought && body.rsiOverbought > 50 && body.rsiOverbought <= 100) update.rsiOverbought = parseInt(body.rsiOverbought);
       if (body.rsiOversold && body.rsiOversold >= 0 && body.rsiOversold < 50) update.rsiOversold = parseInt(body.rsiOversold);
       if (typeof body.requireRsiConfirmation === 'boolean') update.requireRsiConfirmation = body.requireRsiConfirmation;
+      if (body.candleGranularitySeconds && body.candleGranularitySeconds >= 5 && body.candleGranularitySeconds <= 60) {
+        update.candleGranularitySeconds = parseInt(body.candleGranularitySeconds);
+      }
 
       const saved = await memory.saveSettings(update);
       await memory.appendLog(saved.activeStrategy, `Settings updated: ${Object.keys(update).join(', ')}`, 'info');
