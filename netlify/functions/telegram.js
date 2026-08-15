@@ -2,9 +2,19 @@
 // One-way alerts: bot -> you. No commands, no webhook, no 2-way yet.
 // Uses Telegram's HTTP API directly (no npm package needed, avoids
 // the same bundling issues you hit with the ws package).
+//
+// NOTE: emoji are written as unicode escape codes (\u{...}) instead of
+// literal characters, because pasting literal emoji through some
+// editors (e.g. GitHub's web editor) can corrupt the surrounding code.
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+const EMOJI_ROBOT = '\u{1F916}';       // 🤖
+const EMOJI_PAUSE = '\u{23F8}';        // ⏸
+const EMOJI_CHECK = '\u{2705}';        // ✅
+const EMOJI_STOP = '\u{1F6D1}';        // 🛑
+const EMOJI_CHART = '\u{1F4CA}';       // 📊
 
 // Low-level sender. Every alert function below calls this.
 async function sendMessage(text) {
@@ -39,19 +49,19 @@ async function sendMessage(text) {
 // ---- Specific alert types you asked for ----
 
 async function alertBotStarted(strategyName) {
-  return sendMessage(🤖 Bot started\nStrategy: <b>${strategyName}</b>);
+  return sendMessage(`${EMOJI_ROBOT} Bot started\nStrategy: <b>${strategyName}</b>`);
 }
 
 async function alertPaused(strategyName, reason) {
-  return sendMessage(⏸️ Paused\nStrategy: <b>${strategyName}</b>\nReason: ${reason});
+  return sendMessage(`${EMOJI_PAUSE} Paused\nStrategy: <b>${strategyName}</b>\nReason: ${reason}`);
 }
 
 async function alertDailyGoalHit(strategyName, profit) {
-  return sendMessage(✅ Daily goal hit!\nStrategy: <b>${strategyName}</b>\nProfit: $${profit.toFixed(2)});
+  return sendMessage(`${EMOJI_CHECK} Daily goal hit!\nStrategy: <b>${strategyName}</b>\nProfit: $${profit.toFixed(2)}`);
 }
 
 async function alertStopLossHit(strategyName, loss) {
-  return sendMessage(🛑 Daily stop loss hit\nStrategy: <b>${strategyName}</b>\nLoss: $${loss.toFixed(2)});
+  return sendMessage(`${EMOJI_STOP} Daily stop loss hit\nStrategy: <b>${strategyName}</b>\nLoss: $${loss.toFixed(2)}`);
 }
 
 async function alertEODReport(strategyName, state) {
@@ -60,14 +70,14 @@ async function alertEODReport(strategyName, state) {
     : '0.0';
 
   return sendMessage(
-    📊 End of Day Report\n +
-    Strategy: <b>${strategyName}</b>\n +
-    Trades: ${state.tradesToday}\n +
-    Wins: ${state.wins} | Losses: ${state.losses}\n +
-    Win rate: ${winRate}%\n +
-    Profit: $${state.dailyProfit.toFixed(2)}\n +
-    Loss: $${state.dailyLoss.toFixed(2)}\n +
-    Net: $${(state.dailyProfit - state.dailyLoss).toFixed(2)}
+    `${EMOJI_CHART} End of Day Report\n` +
+    `Strategy: <b>${strategyName}</b>\n` +
+    `Trades: ${state.tradesToday}\n` +
+    `Wins: ${state.wins} | Losses: ${state.losses}\n` +
+    `Win rate: ${winRate}%\n` +
+    `Profit: $${state.dailyProfit.toFixed(2)}\n` +
+    `Loss: $${state.dailyLoss.toFixed(2)}\n` +
+    `Net: $${(state.dailyProfit - state.dailyLoss).toFixed(2)}`
   );
 }
 
