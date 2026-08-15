@@ -32,6 +32,12 @@ exports.handler = async function (event) {
       const update = {};
 
       if (body.symbol && ALLOWED_SYMBOLS.includes(body.symbol)) update.symbol = body.symbol;
+      if (body.activeStrategy === 'rise_fall' || body.activeStrategy === 'digit') {
+        update.activeStrategy = body.activeStrategy;
+      }
+      if (body.digitLookback && body.digitLookback >= 10 && body.digitLookback <= 100) {
+        update.digitLookback = parseInt(body.digitLookback);
+      }
 
       // Risk rules - validate ranges before anything else, since stake
       // validation below depends on the resulting dailyStopLoss.
@@ -74,7 +80,7 @@ exports.handler = async function (event) {
       if (body.rsiOversold && body.rsiOversold >= 0 && body.rsiOversold < 50) update.rsiOversold = parseInt(body.rsiOversold);
 
       const saved = await memory.saveSettings(update);
-      await memory.appendLog('rise_fall', `Settings updated: ${Object.keys(update).join(', ')}`, 'info');
+      await memory.appendLog(saved.activeStrategy, `Settings updated: ${Object.keys(update).join(', ')}`, 'info');
 
       return respond({ settings: saved });
     }
