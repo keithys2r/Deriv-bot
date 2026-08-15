@@ -405,6 +405,31 @@
     margin: 8px 0 0;
     text-align: center;
   }
+
+  .strategy-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .strategy-btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 10px;
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--ink-dim);
+    border-radius: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .strategy-btn.selected {
+    border-color: var(--phosphor);
+    color: var(--phosphor);
+    background: rgba(255, 180, 84, 0.08);
+  }
 </style>
 </head>
 <body>
@@ -470,33 +495,51 @@
 
   <div class="settings-panel" id="settingsPanel" style="display:none;">
 
+    <p class="settings-section-label">Active strategy</p>
+    <div class="strategy-toggle">
+      <button type="button" class="strategy-btn" id="riseFallBtn" data-strategy="rise_fall">Rise/Fall</button>
+      <button type="button" class="strategy-btn" id="digitBtn" data-strategy="digit">Digit Differ</button>
+    </div>
+
     <p class="settings-section-label">Symbol</p>
     <div class="symbol-grid" id="symbolGrid"></div>
 
     <p class="settings-section-label">Stake per trade ($)</p>
     <input type="number" id="stakeInput" min="0.35" step="0.5" value="1">
 
-    <p class="settings-section-label">Indicator settings</p>
-    <div class="settings-grid">
-      <div>
-        <label>EMA fast</label>
-        <input type="number" id="emaFastInput" min="2" value="9">
+    <div id="riseFallSettings">
+      <p class="settings-section-label">Indicator settings</p>
+      <div class="settings-grid">
+        <div>
+          <label>EMA fast</label>
+          <input type="number" id="emaFastInput" min="2" value="9">
+        </div>
+        <div>
+          <label>EMA slow</label>
+          <input type="number" id="emaSlowInput" min="3" value="21">
+        </div>
+        <div>
+          <label>RSI period</label>
+          <input type="number" id="rsiPeriodInput" min="2" value="14">
+        </div>
+        <div>
+          <label>RSI overbought</label>
+          <input type="number" id="rsiOverboughtInput" min="51" max="100" value="70">
+        </div>
+        <div>
+          <label>RSI oversold</label>
+          <input type="number" id="rsiOversoldInput" min="0" max="49" value="30">
+        </div>
       </div>
-      <div>
-        <label>EMA slow</label>
-        <input type="number" id="emaSlowInput" min="3" value="21">
-      </div>
-      <div>
-        <label>RSI period</label>
-        <input type="number" id="rsiPeriodInput" min="2" value="14">
-      </div>
-      <div>
-        <label>RSI overbought</label>
-        <input type="number" id="rsiOverboughtInput" min="51" max="100" value="70">
-      </div>
-      <div>
-        <label>RSI oversold</label>
-        <input type="number" id="rsiOversoldInput" min="0" max="49" value="30">
+    </div>
+
+    <div id="digitSettings" style="display:none;">
+      <p class="settings-section-label">Digit settings</p>
+      <div class="settings-grid">
+        <div>
+          <label>Lookback ticks</label>
+          <input type="number" id="digitLookbackInput" min="10" max="100" value="20">
+        </div>
       </div>
     </div>
 
@@ -540,6 +583,7 @@
   var SETTINGS_URL = '/.netlify/functions/settings';
 
   var currentSettings = null;
+  var selectedStrategy = 'rise_fall';
 
   function updateClock() {
     var now = new Date();
@@ -652,6 +696,9 @@
 
     var dot = document.getElementById('statusDot');
     var statusText = document.getElementById('statusText');
+
+    var strategyLabel = data.activeStrategy === 'digit' ? 'DIGIT DIFFER' : 'RISE/FALL';
+    document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 DEMO';
 
     if (data.manualPause) {
       dot.className = 'dot stopped';
@@ -769,19 +816,24 @@
   }
 
   function renderSettings(settings, allowedSymbols) {
+    selectedStrategy = settings.activeStrategy || 'rise_fall';
+    updateStrategyToggleUI();
+
     document.getElementById('stakeInput').value = settings.stakeAmount;
     document.getElementById('emaFastInput').value = settings.emaFastPeriod;
     document.getElementById('emaSlowInput').value = settings.emaSlowPeriod;
     document.getElementById('rsiPeriodInput').value = settings.rsiPeriod;
     document.getElementById('rsiOverboughtInput').value = settings.rsiOverbought;
     document.getElementById('rsiOversoldInput').value = settings.rsiOversold;
+    document.getElementById('digitLookbackInput').value = settings.digitLookback || 20;
     document.getElementById('profitGoalInput').value = settings.dailyProfitGoal;
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
     document.getElementById('maxLossesInput').value = settings.maxConsecutiveLosses;
     document.getElementById('cooldownInput').value = settings.cooldownMinutes;
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
-    document.getElementById('subtitleSymbol').textContent = 'RISE/FALL \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
+    var strategyLabel = selectedStrategy === 'digit' ? 'DIGIT DIFFER' : 'RISE/FALL';
+    document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
 
     var grid = document.getElementById('symbolGrid');
     grid.innerHTML = allowedSymbols.map(function(sym) {
@@ -799,6 +851,22 @@
     });
   }
 
+  function updateStrategyToggleUI() {
+    document.getElementById('riseFallBtn').className = 'strategy-btn' + (selectedStrategy === 'rise_fall' ? ' selected' : '');
+    document.getElementById('digitBtn').className = 'strategy-btn' + (selectedStrategy === 'digit' ? ' selected' : '');
+    document.getElementById('riseFallSettings').style.display = selectedStrategy === 'rise_fall' ? 'block' : 'none';
+    document.getElementById('digitSettings').style.display = selectedStrategy === 'digit' ? 'block' : 'none';
+  }
+
+  document.getElementById('riseFallBtn').addEventListener('click', function() {
+    selectedStrategy = 'rise_fall';
+    updateStrategyToggleUI();
+  });
+  document.getElementById('digitBtn').addEventListener('click', function() {
+    selectedStrategy = 'digit';
+    updateStrategyToggleUI();
+  });
+
   document.getElementById('settingsToggle').addEventListener('click', function() {
     var panel = document.getElementById('settingsPanel');
     var isHidden = panel.style.display === 'none';
@@ -812,12 +880,14 @@
 
     var payload = {
       symbol: selectedChip ? selectedChip.getAttribute('data-symbol') : currentSettings.symbol,
+      activeStrategy: selectedStrategy,
       stakeAmount: parseFloat(document.getElementById('stakeInput').value),
       emaFastPeriod: parseInt(document.getElementById('emaFastInput').value),
       emaSlowPeriod: parseInt(document.getElementById('emaSlowInput').value),
       rsiPeriod: parseInt(document.getElementById('rsiPeriodInput').value),
       rsiOverbought: parseInt(document.getElementById('rsiOverboughtInput').value),
       rsiOversold: parseInt(document.getElementById('rsiOversoldInput').value),
+      digitLookback: parseInt(document.getElementById('digitLookbackInput').value),
       dailyProfitGoal: parseFloat(document.getElementById('profitGoalInput').value),
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
       maxConsecutiveLosses: parseInt(document.getElementById('maxLossesInput').value),
