@@ -7,6 +7,8 @@ const memory = require('./memory');
 exports.handler = async function () {
   try {
     const state = await memory.loadState('rise_fall');
+    const activeTrade = await memory.getActiveTrade('rise_fall');
+    const lastTrade = await memory.getLastTrade('rise_fall');
 
     return {
       statusCode: 200,
@@ -25,7 +27,9 @@ exports.handler = async function () {
         winRate: state.tradesToday > 0 ? (state.wins / state.tradesToday) * 100 : 0,
         lastTradeResult: state.lastTradeResult,
         recentEvents: state.recentEvents || [],
-        lastUpdated: state.lastUpdated
+        lastUpdated: state.lastUpdated,
+        activeTrade: activeTrade || null,
+        lastTrade: lastTrade || null
       })
     };
   } catch (err) {
