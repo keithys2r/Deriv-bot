@@ -500,6 +500,26 @@
       </div>
     </div>
 
+    <p class="settings-section-label">Risk management</p>
+    <div class="settings-grid">
+      <div>
+        <label>Daily profit goal ($)</label>
+        <input type="number" id="profitGoalInput" min="1" step="1" value="20">
+      </div>
+      <div>
+        <label>Daily stop loss ($)</label>
+        <input type="number" id="stopLossInput" min="1" step="1" value="15">
+      </div>
+      <div>
+        <label>Max losses in a row</label>
+        <input type="number" id="maxLossesInput" min="1" step="1" value="3">
+      </div>
+      <div>
+        <label>Cooldown (minutes)</label>
+        <input type="number" id="cooldownInput" min="1" step="1" value="15">
+      </div>
+    </div>
+
     <button class="save-settings-btn" id="saveSettingsBtn">Save settings</button>
     <p class="settings-note" id="settingsNote"></p>
   </div>
@@ -755,6 +775,10 @@
     document.getElementById('rsiPeriodInput').value = settings.rsiPeriod;
     document.getElementById('rsiOverboughtInput').value = settings.rsiOverbought;
     document.getElementById('rsiOversoldInput').value = settings.rsiOversold;
+    document.getElementById('profitGoalInput').value = settings.dailyProfitGoal;
+    document.getElementById('stopLossInput').value = settings.dailyStopLoss;
+    document.getElementById('maxLossesInput').value = settings.maxConsecutiveLosses;
+    document.getElementById('cooldownInput').value = settings.cooldownMinutes;
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
     document.getElementById('subtitleSymbol').textContent = 'RISE/FALL \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
@@ -793,7 +817,11 @@
       emaSlowPeriod: parseInt(document.getElementById('emaSlowInput').value),
       rsiPeriod: parseInt(document.getElementById('rsiPeriodInput').value),
       rsiOverbought: parseInt(document.getElementById('rsiOverboughtInput').value),
-      rsiOversold: parseInt(document.getElementById('rsiOversoldInput').value)
+      rsiOversold: parseInt(document.getElementById('rsiOversoldInput').value),
+      dailyProfitGoal: parseFloat(document.getElementById('profitGoalInput').value),
+      dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
+      maxConsecutiveLosses: parseInt(document.getElementById('maxLossesInput').value),
+      cooldownMinutes: parseInt(document.getElementById('cooldownInput').value)
     };
 
     note.textContent = 'Saving...';
