@@ -75,17 +75,38 @@ async function saveState(strategyName, state) {
 async function recordTrade(strategyName, { won, profitOrLoss, stake }) {
   const state = await loadState(strategyName);
 
+  // Guard against a bad/missing profit value corrupting the running
+  // total. JSON silently turns NaN into null on save, which then
+  // displays as a false "$0.00" instead of surfacing the error - so
+  // catch it here instead and log it loudly.
+  const safeProfitOrLoss = Number.isFinite(profitOrLoss) ? profitOrLoss : 0;
+  if (!Number.isFinite(profitOrLoss)) {
+    console.log(`WARNING: recordTrade got a non-numeric profitOrLoss (${profitOrLoss}) for ${strategyName} - treating as $0, but this trade's real result was NOT counted in P&L.`);
+  }
+
   state.tradesToday += 1;
   state.lastTradeResult = won ? 'win' : 'loss';
 
   if (won) {
     state.wins += 1;
-    state.dailyProfit += profitOrLoss;
+    state.dailyProfit += safeProfitOrLoss;
     state.consecutiveLosses = 0;
   } else {
     state.losses += 1;
-    state.dailyLoss += Math.abs(profitOrLoss);
+    state.dailyLoss += Math.abs(safeProfitOrLoss);
     state.consecutiveLosses += 1;
+  }
+
+  // Extra safety net: if dailyProfit/dailyLoss are somehow already
+  // NaN from a past corrupted save, reset them rather than let the
+  // corruption persist silently forever.
+  if (!Number.isFinite(state.dailyProfit)) {
+    console.log(`WARNING: state.dailyProfit was corrupted (not a finite number) for ${strategyName}, resetting to 0.`);
+    state.dailyProfit = 0;
+  }
+  if (!Number.isFinite(state.dailyLoss)) {
+    console.log(`WARNING: state.dailyLoss was corrupted (not a finite number) for ${strategyName}, resetting to 0.`);
+    state.dailyLoss = 0;
   }
 
   await saveState(strategyName, state);
