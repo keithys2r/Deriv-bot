@@ -61,6 +61,7 @@ exports.handler = async function () {
     // Step 2: get signal
     const signalResult = strategy.getSignal(closes);
     console.log('Signal check:', signalResult.reason);
+    await memory.appendLog(STRATEGY_NAME, signalResult.signal ? `Signal: ${signalResult.signal} - ${signalResult.reason}` : signalResult.reason, 'info');
 
     if (!signalResult.signal) {
       await maybeSendEODReport();
@@ -101,6 +102,11 @@ exports.handler = async function () {
       profitOrLoss: tradeResult.profit,
       stake
     });
+    await memory.appendLog(
+      STRATEGY_NAME,
+      `${signalResult.signal} ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
+      tradeResult.won ? 'win' : 'loss'
+    );
 
     // Step 6: post-trade goal/stop check + alert
     const postTradeRisk = await risk.checkCanTrade(STRATEGY_NAME);
