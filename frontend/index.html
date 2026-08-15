@@ -260,6 +260,131 @@
     color: var(--ink-dim);
     font-style: normal;
   }
+
+  .balance-card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+
+  .trade-card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+
+  .trade-line {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--ink);
+    margin: 0;
+  }
+
+  .trade-line.win { color: var(--green); }
+  .trade-line.loss { color: var(--red); }
+  .trade-line.active { color: var(--phosphor); }
+
+  .settings-toggle {
+    width: 100%;
+    background: transparent;
+    color: var(--ink-dim);
+    border: 1px dashed var(--panel-border);
+    text-transform: none;
+    letter-spacing: 0;
+    margin-bottom: 12px;
+  }
+
+  .settings-panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  .settings-section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0 0 8px;
+  }
+
+  .settings-panel > .settings-section-label:not(:first-child) {
+    margin-top: 18px;
+  }
+
+  .symbol-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .symbol-chip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 8px 4px;
+    text-align: center;
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--ink-dim);
+    border-radius: 6px;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .symbol-chip.selected {
+    border-color: var(--phosphor);
+    color: var(--phosphor);
+    background: rgba(255, 180, 84, 0.08);
+  }
+
+  .settings-panel input[type="number"] {
+    width: 100%;
+    background: var(--void);
+    border: 1px solid var(--panel-border);
+    color: var(--ink);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 8px;
+    border-radius: 6px;
+    margin-top: 4px;
+  }
+
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .settings-grid label {
+    font-size: 11px;
+    color: var(--ink-dim);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .save-settings-btn {
+    width: 100%;
+    margin-top: 16px;
+    background: var(--phosphor);
+    color: var(--void);
+    border-color: var(--phosphor);
+  }
+
+  .settings-note {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-dim);
+    margin: 8px 0 0;
+    text-align: center;
+  }
 </style>
 </head>
 <body>
@@ -277,7 +402,12 @@
   </div>
 
   <h1>BandzzBot</h1>
-  <p class="subtitle">RISE/FALL &middot; VOLATILITY 100 &middot; DEMO</p>
+  <p class="subtitle" id="subtitleSymbol">RISE/FALL &middot; VOLATILITY 100 &middot; DEMO</p>
+
+  <div class="balance-card">
+    <p class="stat-label">Account balance</p>
+    <p class="stat-value neutral" id="balanceValue">--</p>
+  </div>
 
   <div class="scope-panel">
     <canvas id="scope"></canvas>
@@ -302,9 +432,52 @@
     </div>
   </div>
 
+  <div class="trade-card" id="tradeCard">
+    <p class="stat-label" id="tradeCardLabel">Last trade</p>
+    <p class="trade-line" id="tradeLine">No trades yet</p>
+  </div>
+
   <div class="controls">
     <button class="btn-start" id="startBtn">Start</button>
     <button class="btn-stop" id="stopBtn">Stop</button>
+  </div>
+
+  <button class="settings-toggle" id="settingsToggle">Settings &amp; symbol &#9662;</button>
+
+  <div class="settings-panel" id="settingsPanel" style="display:none;">
+
+    <p class="settings-section-label">Symbol</p>
+    <div class="symbol-grid" id="symbolGrid"></div>
+
+    <p class="settings-section-label">Stake per trade ($)</p>
+    <input type="number" id="stakeInput" min="0.35" step="0.5" value="1">
+
+    <p class="settings-section-label">Indicator settings</p>
+    <div class="settings-grid">
+      <div>
+        <label>EMA fast</label>
+        <input type="number" id="emaFastInput" min="2" value="9">
+      </div>
+      <div>
+        <label>EMA slow</label>
+        <input type="number" id="emaSlowInput" min="3" value="21">
+      </div>
+      <div>
+        <label>RSI period</label>
+        <input type="number" id="rsiPeriodInput" min="2" value="14">
+      </div>
+      <div>
+        <label>RSI overbought</label>
+        <input type="number" id="rsiOverboughtInput" min="51" max="100" value="70">
+      </div>
+      <div>
+        <label>RSI oversold</label>
+        <input type="number" id="rsiOversoldInput" min="0" max="49" value="30">
+      </div>
+    </div>
+
+    <button class="save-settings-btn" id="saveSettingsBtn">Save settings</button>
+    <p class="settings-note" id="settingsNote"></p>
   </div>
 
   <div class="log-panel">
@@ -319,6 +492,10 @@
 <script>
   var STATUS_URL = '/.netlify/functions/status';
   var CONTROL_URL = '/.netlify/functions/control';
+  var BALANCE_URL = '/.netlify/functions/balance';
+  var SETTINGS_URL = '/.netlify/functions/settings';
+
+  var currentSettings = null;
 
   function updateClock() {
     var now = new Date();
@@ -422,6 +599,23 @@
     } else {
       logLines.innerHTML = '<div class="log-line"><span class="empty-log">No events yet - waiting for the bot to run.</span></div>';
     }
+
+    var tradeLabel = document.getElementById('tradeCardLabel');
+    var tradeLine = document.getElementById('tradeLine');
+
+    if (data.activeTrade) {
+      tradeLabel.textContent = 'Trade in progress';
+      tradeLine.className = 'trade-line active';
+      tradeLine.textContent = data.activeTrade.direction + ' on ' + data.activeTrade.symbol + ' - $' + data.activeTrade.stake.toFixed(2) + ' stake';
+    } else if (data.lastTrade) {
+      tradeLabel.textContent = 'Last trade';
+      tradeLine.className = 'trade-line ' + (data.lastTrade.won ? 'win' : 'loss');
+      tradeLine.textContent = data.lastTrade.direction + ' on ' + data.lastTrade.symbol + ' - ' + (data.lastTrade.won ? 'WON' : 'LOST') + ' ' + fmtMoney(Math.abs(data.lastTrade.profit)) + ' (' + fmtTime(data.lastTrade.settledAt) + ')';
+    } else {
+      tradeLabel.textContent = 'Last trade';
+      tradeLine.className = 'trade-line';
+      tradeLine.textContent = 'No trades yet';
+    }
   }
 
   function poll() {
@@ -458,8 +652,108 @@
     sendControl('stop');
   });
 
+  function pollBalance() {
+    fetch(BALANCE_URL)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var el = document.getElementById('balanceValue');
+        if (data.error) {
+          el.textContent = '--';
+          return;
+        }
+        el.textContent = '$' + Number(data.balance).toFixed(2) + ' ' + data.currency;
+      })
+      .catch(function() {
+        document.getElementById('balanceValue').textContent = '--';
+      });
+  }
+
+  var SYMBOL_LABELS = {
+    'R_10': 'Vol 10', 'R_25': 'Vol 25', 'R_50': 'Vol 50',
+    'R_75': 'Vol 75', 'R_100': 'Vol 100',
+    '1HZ10V': 'Vol 10 (1s)', '1HZ25V': 'Vol 25 (1s)', '1HZ50V': 'Vol 50 (1s)',
+    '1HZ75V': 'Vol 75 (1s)', '1HZ100V': 'Vol 100 (1s)'
+  };
+
+  function loadSettings() {
+    fetch(SETTINGS_URL)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        currentSettings = data.settings;
+        renderSettings(data.settings, data.allowedSymbols);
+      });
+  }
+
+  function renderSettings(settings, allowedSymbols) {
+    document.getElementById('stakeInput').value = settings.stakeAmount;
+    document.getElementById('emaFastInput').value = settings.emaFastPeriod;
+    document.getElementById('emaSlowInput').value = settings.emaSlowPeriod;
+    document.getElementById('rsiPeriodInput').value = settings.rsiPeriod;
+    document.getElementById('rsiOverboughtInput').value = settings.rsiOverbought;
+    document.getElementById('rsiOversoldInput').value = settings.rsiOversold;
+
+    var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
+    document.getElementById('subtitleSymbol').textContent = 'RISE/FALL \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
+
+    var grid = document.getElementById('symbolGrid');
+    grid.innerHTML = allowedSymbols.map(function(sym) {
+      var selected = sym === settings.symbol ? ' selected' : '';
+      return '<button type="button" class="symbol-chip' + selected + '" data-symbol="' + sym + '">' + (SYMBOL_LABELS[sym] || sym) + '</button>';
+    }).join('');
+
+    Array.prototype.forEach.call(grid.querySelectorAll('.symbol-chip'), function(chip) {
+      chip.addEventListener('click', function() {
+        Array.prototype.forEach.call(grid.querySelectorAll('.symbol-chip'), function(c) {
+          c.classList.remove('selected');
+        });
+        chip.classList.add('selected');
+      });
+    });
+  }
+
+  document.getElementById('settingsToggle').addEventListener('click', function() {
+    var panel = document.getElementById('settingsPanel');
+    var isHidden = panel.style.display === 'none';
+    panel.style.display = isHidden ? 'block' : 'none';
+    if (isHidden && !currentSettings) loadSettings();
+  });
+
+  document.getElementById('saveSettingsBtn').addEventListener('click', function() {
+    var selectedChip = document.querySelector('.symbol-chip.selected');
+    var note = document.getElementById('settingsNote');
+
+    var payload = {
+      symbol: selectedChip ? selectedChip.getAttribute('data-symbol') : currentSettings.symbol,
+      stakeAmount: parseFloat(document.getElementById('stakeInput').value),
+      emaFastPeriod: parseInt(document.getElementById('emaFastInput').value),
+      emaSlowPeriod: parseInt(document.getElementById('emaSlowInput').value),
+      rsiPeriod: parseInt(document.getElementById('rsiPeriodInput').value),
+      rsiOverbought: parseInt(document.getElementById('rsiOverboughtInput').value),
+      rsiOversold: parseInt(document.getElementById('rsiOversoldInput').value)
+    };
+
+    note.textContent = 'Saving...';
+
+    fetch(SETTINGS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        currentSettings = data.settings;
+        renderSettings(data.settings, Object.keys(SYMBOL_LABELS));
+        note.textContent = 'Saved - takes effect on the next run (within 1 min).';
+      })
+      .catch(function() {
+        note.textContent = 'Save failed - try again.';
+      });
+  });
+
   poll();
+  pollBalance();
   setInterval(poll, 5000);
+  setInterval(pollBalance, 20000);
 </script>
 
 </body>
