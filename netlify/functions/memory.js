@@ -5,9 +5,16 @@
 
 const { getStore } = require('@netlify/blobs');
 
-// One store for all bot memory, keyed by strategy name inside it
+// One store for all bot memory, keyed by strategy name inside it.
+// Explicitly passing siteID + token because scheduled functions don't
+// always get Netlify's automatic Blobs context the way normal
+// request-triggered functions do.
 function getMemoryStore() {
-  return getStore('bot-memory');
+  return getStore({
+    name: 'bot-memory',
+    siteID: process.env.NETLIFY_SITE_ID,
+    token: process.env.NETLIFY_AUTH_TOKEN
+  });
 }
 
 // Default shape for a brand new day / brand new strategy
