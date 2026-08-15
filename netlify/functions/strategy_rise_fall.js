@@ -70,10 +70,19 @@ function calculateRSI(closes, period) {
 }
 
 // Main signal function.
-// Input: array of closing prices, oldest first, most recent last.
+// Input: array of closing prices (oldest first, most recent last), and
+// an optional params object to override the defaults below - this is
+// how user-configured settings (from the frontend) reach the strategy.
 // Output: { signal: 'CALL' | 'PUT' | null, reason: string, details: {...} }
-function getSignal(closes) {
-  const minCandles = Math.max(EMA_SLOW_PERIOD, RSI_PERIOD + 1) + 1;
+function getSignal(closes, params) {
+  params = params || {};
+  const emaFastPeriod = params.emaFastPeriod || EMA_FAST_PERIOD;
+  const emaSlowPeriod = params.emaSlowPeriod || EMA_SLOW_PERIOD;
+  const rsiPeriod = params.rsiPeriod || RSI_PERIOD;
+  const rsiOverbought = params.rsiOverbought || RSI_OVERBOUGHT;
+  const rsiOversold = params.rsiOversold || RSI_OVERSOLD;
+
+  const minCandles = Math.max(emaSlowPeriod, rsiPeriod + 1) + 1;
 
   if (!Array.isArray(closes) || closes.length < minCandles) {
     return {
@@ -83,9 +92,9 @@ function getSignal(closes) {
     };
   }
 
-  const emaFast = calculateEMA(closes, EMA_FAST_PERIOD);
-  const emaSlow = calculateEMA(closes, EMA_SLOW_PERIOD);
-  const rsi = calculateRSI(closes, RSI_PERIOD);
+  const emaFast = calculateEMA(closes, emaFastPeriod);
+  const emaSlow = calculateEMA(closes, emaSlowPeriod);
+  const rsi = calculateRSI(closes, rsiPeriod);
 
   const lastIndex = closes.length - 1;
   const prevIndex = lastIndex - 1;
@@ -112,20 +121,20 @@ function getSignal(closes) {
 
   // Bullish confluence: fast EMA just crossed above slow EMA, RSI not overbought
   const bullishCross = fastPrev <= slowPrev && fastNow > slowNow;
-  if (bullishCross && rsiNow < RSI_OVERBOUGHT) {
+  if (bullishCross && rsiNow < rsiOverbought) {
     return {
       signal: 'CALL',
-      reason: `EMA${EMA_FAST_PERIOD} crossed above EMA${EMA_SLOW_PERIOD}, RSI ${rsiNow.toFixed(1)} (not overbought)`,
+      reason: `EMA${emaFastPeriod} crossed above EMA${emaSlowPeriod}, RSI ${rsiNow.toFixed(1)} (not overbought)`,
       details
     };
   }
 
   // Bearish confluence: fast EMA just crossed below slow EMA, RSI not oversold
   const bearishCross = fastPrev >= slowPrev && fastNow < slowNow;
-  if (bearishCross && rsiNow > RSI_OVERSOLD) {
+  if (bearishCross && rsiNow > rsiOversold) {
     return {
       signal: 'PUT',
-      reason: `EMA${EMA_FAST_PERIOD} crossed below EMA${EMA_SLOW_PERIOD}, RSI ${rsiNow.toFixed(1)} (not oversold)`,
+      reason: `EMA${emaFastPeriod} crossed below EMA${emaSlowPeriod}, RSI ${rsiNow.toFixed(1)} (not oversold)`,
       details
     };
   }
