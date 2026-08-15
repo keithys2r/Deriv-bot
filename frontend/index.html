@@ -430,6 +430,25 @@
     color: var(--phosphor);
     background: rgba(255, 180, 84, 0.08);
   }
+
+  .checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .checkbox-row input[type="checkbox"] {
+    margin-top: 3px;
+    accent-color: var(--phosphor);
+  }
+
+  .checkbox-row label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-dim);
+    line-height: 1.4;
+  }
 </style>
 </head>
 <body>
@@ -530,6 +549,10 @@
           <label>RSI oversold</label>
           <input type="number" id="rsiOversoldInput" min="0" max="49" value="30">
         </div>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="rsiConfirmInput" checked>
+        <label for="rsiConfirmInput">Require RSI confirmation on crossover (uncheck to fire on EMA crossover alone - more trades, less filtering)</label>
       </div>
     </div>
 
@@ -825,6 +848,7 @@
     document.getElementById('rsiPeriodInput').value = settings.rsiPeriod;
     document.getElementById('rsiOverboughtInput').value = settings.rsiOverbought;
     document.getElementById('rsiOversoldInput').value = settings.rsiOversold;
+    document.getElementById('rsiConfirmInput').checked = settings.requireRsiConfirmation !== false;
     document.getElementById('digitLookbackInput').value = settings.digitLookback || 20;
     document.getElementById('profitGoalInput').value = settings.dailyProfitGoal;
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
@@ -887,6 +911,7 @@
       rsiPeriod: parseInt(document.getElementById('rsiPeriodInput').value),
       rsiOverbought: parseInt(document.getElementById('rsiOverboughtInput').value),
       rsiOversold: parseInt(document.getElementById('rsiOversoldInput').value),
+      requireRsiConfirmation: document.getElementById('rsiConfirmInput').checked,
       digitLookback: parseInt(document.getElementById('digitLookbackInput').value),
       dailyProfitGoal: parseFloat(document.getElementById('profitGoalInput').value),
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
