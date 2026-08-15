@@ -144,7 +144,9 @@ function defaultSettings() {
 async function loadSettings() {
   const store = getMemoryStore();
   const existing = await store.get(SETTINGS_KEY, { type: 'json' });
-  return existing || defaultSettings();
+  // Merge with defaults so settings saved before new fields existed
+  // (like the risk management fields) don't come back as undefined.
+  return Object.assign({}, defaultSettings(), existing || {});
 }
 
 async function saveSettings(newSettings) {
