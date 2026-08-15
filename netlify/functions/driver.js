@@ -383,6 +383,25 @@ function buildCandlesFromTicks(prices, times, granularitySeconds) {
 // Used by the digit strategy - fetches the last N raw ticks by count.
 function connectAndGetTicks(wsUrl, symbol, count) {
   return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    let resolved = false;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.close(); } catch (e) {}
+        reject(new Error('Timeout waiting for tick history'));
+      }
+    }, 8000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        ticks_history: symbol,
+        style: 'ticks',
+        count: count,
+        end: 'latest'
+      }));
+    };
 
     ws.onmessage = (event) => {
       const res = JSON.parse(event.data);
