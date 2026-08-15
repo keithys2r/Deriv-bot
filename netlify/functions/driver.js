@@ -21,7 +21,6 @@ const digitStrategy = require('./strategy_digit');
 const { getOtpWebSocketUrl } = require('./deriv-auth');
 
 // ---- Config ----
-const CANDLE_GRANULARITY = 60; // 1-minute candles (rise/fall)
 const RISE_FALL_DURATION = 5; // ticks
 const RISE_FALL_DURATION_UNIT = 't';
 const DIGIT_DURATION = 1; // ticks
@@ -73,8 +72,16 @@ async function runRiseFallStrategy(token, app_id, settings) {
   // configured, plus a buffer - a fixed count would silently break
   // the strategy if the user sets a longer EMA/RSI period than that.
   const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
-  const candles = await connectAndGetCandles(candleAuth.wsUrl, symbol, neededCandles);
-  const closes = candles.map((c) => c.close ?? c.Close ?? c[4]);
+  const granularitySeconds = settings.candleGranularitySeconds || 15;
+  const lookbackSeconds = neededCandles * granularitySeconds + 60; // small buffer
+
+  // Build candles from raw ticks instead of Deriv's native candle
+  // endpoint, which has a 1-minute floor. This lets the strategy react
+  // to moves inside a single Deriv-native minute that it would
+  // otherwise never see.
+  const tickData = await connectAndGetTicksInRange(candleAuth.wsUrl, symbol, lookbackSeconds);
+  const candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
+  const closes = candles.map((c) => c.close);
 
   const signalResult = riseFallStrategy.getSignal(closes, {
     emaFastPeriod: settings.emaFastPeriod,
@@ -290,7 +297,7 @@ async function maybeSendEODReport(strategyName) {
   }
 }
 
-function connectAndGetCandles(wsUrl, symbol, count) {
+function connectAndGetTicksInRange(wsUrl, symbol, lookbackSeconds) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     let resolved = false;
@@ -299,16 +306,16 @@ function connectAndGetCandles(wsUrl, symbol, count) {
       if (!resolved) {
         resolved = true;
         try { ws.close(); } catch (e) {}
-        reject(new Error('Timeout waiting for candle history'));
+        reject(new Error('Timeout waiting for tick history'));
       }
-    }, 8000);
+    }, 10000);
 
     ws.onopen = () => {
+      const startEpoch = Math.floor(Date.now() / 1000) - lookbackSeconds;
       ws.send(JSON.stringify({
         ticks_history: symbol,
-        style: 'candles',
-        granularity: CANDLE_GRANULARITY,
-        count: count,
+        style: 'ticks',
+        start: startEpoch,
         end: 'latest'
       }));
     };
@@ -322,11 +329,15 @@ function connectAndGetCandles(wsUrl, symbol, count) {
         reject(new Error(res.error.message));
         return;
       }
-      if (res.msg_type === 'candles') {
+      if (res.msg_type === 'history') {
         clearTimeout(timeout);
         resolved = true;
         ws.close();
-        resolve(res.candles || (res.data && res.data.candles) || []);
+        const history = res.history || (res.data && res.data.history) || {};
+        resolve({
+          prices: history.prices || [],
+          times: history.times || []
+        });
       }
     };
 
@@ -340,27 +351,38 @@ function connectAndGetCandles(wsUrl, symbol, count) {
   });
 }
 
+// Buckets raw ticks into fixed-size candles, the same way a real candle
+// chart works, just at a resolution finer than Deriv's native 1-minute
+// minimum. Ticks within the same time bucket become one candle.
+function buildCandlesFromTicks(prices, times, granularitySeconds) {
+  if (!prices.length) return [];
+
+  const buckets = new Map(); // bucketStartEpoch -> array of prices in order
+
+  for (let i = 0; i < prices.length; i++) {
+    const price = prices[i];
+    const time = times[i];
+    const bucketStart = Math.floor(time / granularitySeconds) * granularitySeconds;
+    if (!buckets.has(bucketStart)) buckets.set(bucketStart, []);
+    buckets.get(bucketStart).push(price);
+  }
+
+  const sortedBucketKeys = Array.from(buckets.keys()).sort((a, b) => a - b);
+
+  return sortedBucketKeys.map((bucketStart) => {
+    const bucketPrices = buckets.get(bucketStart);
+    return {
+      epoch: bucketStart,
+      open: bucketPrices[0],
+      high: Math.max(...bucketPrices),
+      low: Math.min(...bucketPrices),
+      close: bucketPrices[bucketPrices.length - 1]
+    };
+  });
+}
+// Used by the digit strategy - fetches the last N raw ticks by count.
 function connectAndGetTicks(wsUrl, symbol, count) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl);
-    let resolved = false;
-
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        try { ws.close(); } catch (e) {}
-        reject(new Error('Timeout waiting for tick history'));
-      }
-    }, 8000);
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        ticks_history: symbol,
-        style: 'ticks',
-        count: count,
-        end: 'latest'
-      }));
-    };
 
     ws.onmessage = (event) => {
       const res = JSON.parse(event.data);
