@@ -17,6 +17,15 @@ async function checkCanTrade(strategyName) {
   const state = await memory.loadState(strategyName);
   const now = new Date();
 
+  // 0. Manual pause - user hit STOP on the frontend, overrides everything else
+  if (state.manualPause) {
+    return {
+      canTrade: false,
+      reason: 'Manually paused by user (STOP button)',
+      state
+    };
+  }
+
   // 1. Check if currently in a cooldown pause
   if (state.paused && state.pausedUntil) {
     const pausedUntil = new Date(state.pausedUntil);
