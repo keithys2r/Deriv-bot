@@ -81,7 +81,8 @@ async function runRiseFallStrategy(token, app_id, settings) {
     emaSlowPeriod: settings.emaSlowPeriod,
     rsiPeriod: settings.rsiPeriod,
     rsiOverbought: settings.rsiOverbought,
-    rsiOversold: settings.rsiOversold
+    rsiOversold: settings.rsiOversold,
+    requireRsiConfirmation: settings.requireRsiConfirmation
   });
   console.log('Signal check:', signalResult.reason);
   if (signalResult.signal) {
