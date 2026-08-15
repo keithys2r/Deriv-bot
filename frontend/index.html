@@ -128,7 +128,27 @@
   canvas#scope {
     display: block;
     width: 100%;
-    height: 90px;
+    height: 160px;
+  }
+
+  .chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .chart-symbol {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--phosphor);
+    letter-spacing: 0.5px;
+  }
+
+  .chart-timeframe {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-dim);
   }
 
   .stats-grid {
@@ -410,6 +430,10 @@
   </div>
 
   <div class="scope-panel">
+    <div class="chart-header">
+      <span class="chart-symbol" id="chartSymbol">--</span>
+      <span class="chart-timeframe">1M</span>
+    </div>
     <canvas id="scope"></canvas>
   </div>
 
@@ -506,49 +530,89 @@
 
   var canvas = document.getElementById('scope');
   var ctx = canvas.getContext('2d');
-  var scopeData = [];
-  var scopeLevel = 50;
+  var CHART_URL = '/.netlify/functions/chart';
 
   function resizeCanvas() {
     var rect = canvas.getBoundingClientRect();
     canvas.width = rect.width * devicePixelRatio;
     canvas.height = rect.height * devicePixelRatio;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(devicePixelRatio, devicePixelRatio);
   }
   resizeCanvas();
-  window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('resize', function() {
+    resizeCanvas();
+    if (window.lastCandles) drawCandles(window.lastCandles);
+  });
 
-  for (var i = 0; i < 120; i++) scopeData.push(50);
-
-  function drawScope() {
-    var w = canvas.getBoundingClientRect().width;
-    var h = canvas.getBoundingClientRect().height;
-
-    scopeLevel += (Math.random() - 0.5) * 8;
-    scopeLevel = Math.max(15, Math.min(85, scopeLevel));
-    scopeData.push(scopeLevel);
-    if (scopeData.length > 120) scopeData.shift();
+  function drawCandles(candles) {
+    var rect = canvas.getBoundingClientRect();
+    var w = rect.width;
+    var h = rect.height;
 
     ctx.clearRect(0, 0, w, h);
 
-    ctx.strokeStyle = '#FFB454';
-    ctx.lineWidth = 1.5;
-    ctx.shadowColor = '#FFB454';
-    ctx.shadowBlur = 4;
-    ctx.beginPath();
-
-    for (var j = 0; j < scopeData.length; j++) {
-      var x = (j / (scopeData.length - 1)) * w;
-      var y = h - (scopeData[j] / 100) * h;
-      if (j === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+    if (!candles || candles.length === 0) {
+      ctx.fillStyle = '#64707D';
+      ctx.font = '12px "IBM Plex Mono", monospace';
+      ctx.fillText('Waiting for candle data...', 10, h / 2);
+      return;
     }
-    ctx.stroke();
-    ctx.shadowBlur = 0;
 
-    requestAnimationFrame(drawScope);
+    var highs = candles.map(function(c) { return c.high; });
+    var lows = candles.map(function(c) { return c.low; });
+    var maxPrice = Math.max.apply(null, highs);
+    var minPrice = Math.min.apply(null, lows);
+    var range = maxPrice - minPrice || 1;
+
+    var padding = 4;
+    var usableH = h - padding * 2;
+    var candleSlot = w / candles.length;
+    var bodyWidth = Math.max(2, candleSlot * 0.6);
+
+    function priceToY(price) {
+      return padding + (1 - (price - minPrice) / range) * usableH;
+    }
+
+    candles.forEach(function(c, i) {
+      var x = i * candleSlot + candleSlot / 2;
+      var isUp = c.close >= c.open;
+      var color = isUp ? '#3ADB76' : '#FF5C5C';
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, priceToY(c.high));
+      ctx.lineTo(x, priceToY(c.low));
+      ctx.stroke();
+
+      var bodyTop = priceToY(Math.max(c.open, c.close));
+      var bodyBottom = priceToY(Math.min(c.open, c.close));
+      var bodyHeight = Math.max(1, bodyBottom - bodyTop);
+
+      ctx.fillStyle = color;
+      ctx.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
+    });
+
+    var lastClose = candles[candles.length - 1].close;
+    ctx.fillStyle = '#FFB454';
+    ctx.font = '10px "IBM Plex Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(lastClose.toFixed(2), w - 4, priceToY(lastClose) - 4);
+    ctx.textAlign = 'left';
   }
-  drawScope();
+
+  function pollChart() {
+    fetch(CHART_URL)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) return;
+        window.lastCandles = data.candles;
+        document.getElementById('chartSymbol').textContent = SYMBOL_LABELS[data.symbol] || data.symbol;
+        drawCandles(data.candles);
+      })
+      .catch(function() {});
+  }
 
   function fmtMoney(n) {
     var sign = n >= 0 ? '+' : '-';
@@ -752,8 +816,10 @@
 
   poll();
   pollBalance();
+  pollChart();
   setInterval(poll, 5000);
   setInterval(pollBalance, 20000);
+  setInterval(pollChart, 15000);
 </script>
 
 </body>
