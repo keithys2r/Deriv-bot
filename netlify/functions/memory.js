@@ -127,6 +127,7 @@ const SETTINGS_KEY = 'bot_settings';
 
 function defaultSettings() {
   return {
+    activeStrategy: 'rise_fall', // 'rise_fall' | 'digit' - the switch
     symbol: 'R_100',
     stakeAmount: 1,
     emaFastPeriod: 9,
@@ -134,6 +135,7 @@ function defaultSettings() {
     rsiPeriod: 14,
     rsiOverbought: 70,
     rsiOversold: 30,
+    digitLookback: 20,
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
     maxConsecutiveLosses: 3,
