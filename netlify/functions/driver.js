@@ -33,6 +33,12 @@ exports.handler = async function () {
   const token = process.env.DERIV_TOKEN;
   const app_id = process.env.APP_ID || '1089';
 
+  // TEMPORARY DEBUG - remove after diagnosing the invalid token issue
+  console.log('DEBUG token length:', token ? token.length : 'undefined');
+  console.log('DEBUG token first 6 chars:', token ? token.slice(0, 6) : 'undefined');
+  console.log('DEBUG token last 4 chars:', token ? token.slice(-4) : 'undefined');
+  console.log('DEBUG app_id:', app_id);
+
   if (!token) {
     console.log('No DERIV_TOKEN set, exiting.');
     return { statusCode: 200, body: JSON.stringify({ message: 'No token configured' }) };
