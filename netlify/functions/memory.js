@@ -157,6 +157,7 @@ function defaultSettings() {
     rsiOverbought: 70,
     rsiOversold: 30,
     requireRsiConfirmation: true,
+    candleGranularitySeconds: 15, // custom candle size built from raw ticks - Deriv's native minimum is 60s
     digitLookback: 20,
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
