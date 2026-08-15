@@ -156,6 +156,7 @@ function defaultSettings() {
     rsiPeriod: 14,
     rsiOverbought: 70,
     rsiOversold: 30,
+    requireRsiConfirmation: true,
     digitLookback: 20,
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
