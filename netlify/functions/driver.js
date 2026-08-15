@@ -250,6 +250,7 @@ async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeRe
     `${direction} ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
     tradeResult.won ? 'win' : 'loss'
   );
+  await telegram.alertTradeResult(strategyName, direction, symbol, stake, tradeResult.won, tradeResult.profit);
   return updatedState;
 }
 
