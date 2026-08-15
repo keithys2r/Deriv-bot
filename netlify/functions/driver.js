@@ -1,37 +1,33 @@
 // driver.js
 // Scheduled function - Netlify triggers this automatically on a timer.
 //
-// Uses Deriv's NEW API via deriv-auth.js (accounts -> OTP -> WebSocket).
-// Symbol, stake, and indicator settings now come from settings.js /
-// memory.js instead of being hardcoded, so the frontend can control them.
+// ONE bot, TWO strategies, ONE switch. settings.activeStrategy decides
+// which logic runs each minute: 'rise_fall' (EMA/RSI on candles) or
+// 'digit' (Digit Differ on tick frequency). Only one runs per invocation -
+// they are not run in parallel. Switching strategies in the dashboard
+// takes effect on the NEXT scheduled run.
 //
-// Flow each run:
-//   1. Load user settings (symbol, stake, indicator periods)
-//   2. Get candles via a new OTP connection
-//   3. Ask strategy_rise_fall.js for a signal using those settings
-//   4. If signal exists, ask risk.js if we're allowed to trade
-//   5. If allowed, get a fresh OTP, place the trade, wait for it to settle
-//   6. Record the outcome in memory.js (including activeTrade/lastTrade)
-//   7. Send Telegram alerts for pause / goal / stop-loss / EOD report
+// Each strategy keeps its own separate memory/risk state (keyed by
+// strategy name), so switching back and forth doesn't mix up stats.
 //
-// IMPORTANT: Test with your DEMO token only until you've watched this
-// run for real over several days. Do not point this at a real-money
-// token yet.
+// IMPORTANT: Test with your DEMO token only. Do not point this at a
+// real-money token yet.
 
 const memory = require('./memory');
 const risk = require('./risk');
 const telegram = require('./telegram');
-const strategy = require('./strategy_rise_fall');
+const riseFallStrategy = require('./strategy_rise_fall');
+const digitStrategy = require('./strategy_digit');
 const { getOtpWebSocketUrl } = require('./deriv-auth');
 
-const STRATEGY_NAME = strategy.STRATEGY_NAME; // 'rise_fall'
-
-// ---- Config (fallback defaults if settings.js has nothing saved yet) ----
-const CANDLE_GRANULARITY = 60; // 1-minute candles
-const CANDLE_COUNT = 50; // how many candles of history to pull
-const CONTRACT_DURATION = 5; // ticks
-const CONTRACT_DURATION_UNIT = 't';
-const EOD_HOUR_UTC = 23; // hour (0-23, UTC) to send end-of-day report
+// ---- Config ----
+const CANDLE_GRANULARITY = 60; // 1-minute candles (rise/fall)
+const CANDLE_COUNT = 50;
+const RISE_FALL_DURATION = 5; // ticks
+const RISE_FALL_DURATION_UNIT = 't';
+const DIGIT_DURATION = 1; // ticks
+const DIGIT_DURATION_UNIT = 't';
+const EOD_HOUR_UTC = 23;
 // -----------------
 
 exports.handler = async function () {
@@ -45,144 +41,230 @@ exports.handler = async function () {
 
   try {
     const settings = await memory.loadSettings();
-    const symbol = settings.symbol;
+    const strategyName = settings.activeStrategy || 'rise_fall';
 
-    // Safety net: even if a stake was saved before this validation existed,
-    // never risk more than 20% of the daily stop loss on a single trade.
+    // Safety net: never let a single trade risk more than 20% of the
+    // daily stop loss, regardless of what got saved.
     const maxSafeStake = settings.dailyStopLoss * 0.2;
     if (settings.stakeAmount > maxSafeStake) {
       console.log(`Stake $${settings.stakeAmount} exceeds safe max $${maxSafeStake}, clamping.`);
-      await memory.appendLog(STRATEGY_NAME, `Stake clamped from $${settings.stakeAmount} to $${maxSafeStake.toFixed(2)} (safety limit)`, 'pause');
+      await memory.appendLog(strategyName, `Stake clamped from $${settings.stakeAmount} to $${maxSafeStake.toFixed(2)} (safety limit)`, 'pause');
       settings.stakeAmount = maxSafeStake;
       await memory.saveSettings({ stakeAmount: maxSafeStake });
     }
 
-    // Step 1: fresh OTP + candles
-    const candleAuth = await getOtpWebSocketUrl(token, app_id);
-    const candles = await connectAndGetCandles(candleAuth.wsUrl, symbol);
-    const closes = candles.map((c) => c.close ?? c.Close ?? c[4]);
-
-    // Step 2: get signal, using user-configured indicator settings
-    const signalResult = strategy.getSignal(closes, {
-      emaFastPeriod: settings.emaFastPeriod,
-      emaSlowPeriod: settings.emaSlowPeriod,
-      rsiPeriod: settings.rsiPeriod,
-      rsiOverbought: settings.rsiOverbought,
-      rsiOversold: settings.rsiOversold
-    });
-    console.log('Signal check:', signalResult.reason);
-
-    // Only write to the live log when something actually happened - a
-    // routine "no crossover" check every minute would flood the log and
-    // bury the events that actually matter.
-    if (signalResult.signal) {
-      await memory.appendLog(STRATEGY_NAME, `Signal: ${signalResult.signal} - ${signalResult.reason}`, 'info');
+    if (strategyName === 'digit') {
+      return await runDigitStrategy(token, app_id, settings);
+    } else {
+      return await runRiseFallStrategy(token, app_id, settings);
     }
-
-    if (!signalResult.signal) {
-      await maybeSendEODReport();
-      return respond({ message: 'No trade signal this run', ...signalResult });
-    }
-
-    // Step 3: risk check
-    const riskCheck = await risk.checkCanTrade(STRATEGY_NAME);
-
-    if (!riskCheck.canTrade) {
-      console.log('Blocked by risk.js:', riskCheck.reason);
-
-      if (riskCheck.reason.includes('cooldown started')) {
-        await telegram.alertPaused(STRATEGY_NAME, riskCheck.reason);
-      } else if (riskCheck.reason.includes('profit goal hit')) {
-        const s = await memory.loadState(STRATEGY_NAME);
-        if (!s.goalAlertSent) {
-          await telegram.alertDailyGoalHit(STRATEGY_NAME, s.dailyProfit);
-          s.goalAlertSent = true;
-          await memory.saveState(STRATEGY_NAME, s);
-        }
-      } else if (riskCheck.reason.includes('stop loss hit')) {
-        const s = await memory.loadState(STRATEGY_NAME);
-        if (!s.stopLossAlertSent) {
-          await telegram.alertStopLossHit(STRATEGY_NAME, s.dailyLoss);
-          s.stopLossAlertSent = true;
-          await memory.saveState(STRATEGY_NAME, s);
-        }
-      }
-
-      await maybeSendEODReport();
-      return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
-    }
-
-    // Step 4: mark a trade as "active" before placing it, so the frontend
-    // can show something is in flight even during the brief settle window
-    const stake = parseFloat(settings.stakeAmount || 1);
-    await memory.setActiveTrade(STRATEGY_NAME, {
-      direction: signalResult.signal,
-      symbol,
-      stake,
-      placedAt: new Date().toISOString()
-    });
-
-    // Step 5: fresh OTP for trade, place it, wait for result
-    const tradeAuth = await getOtpWebSocketUrl(token, app_id);
-    const tradeResult = await placeTradeAndWait(tradeAuth.wsUrl, symbol, signalResult.signal, stake);
-
-    if (tradeResult.error) {
-      console.log('Trade execution error:', tradeResult.error);
-      await memory.clearActiveTrade(STRATEGY_NAME);
-      return respond({ message: 'Trade failed to execute', error: tradeResult.error });
-    }
-
-    // Step 6: record outcome + clear active trade + set last trade
-    const updatedState = await memory.recordTrade(STRATEGY_NAME, {
-      won: tradeResult.won,
-      profitOrLoss: tradeResult.profit,
-      stake
-    });
-    await memory.setLastTrade(STRATEGY_NAME, {
-      direction: signalResult.signal,
-      symbol,
-      stake,
-      won: tradeResult.won,
-      profit: tradeResult.profit,
-      settledAt: new Date().toISOString()
-    });
-    await memory.clearActiveTrade(STRATEGY_NAME);
-    await memory.appendLog(
-      STRATEGY_NAME,
-      `${signalResult.signal} ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
-      tradeResult.won ? 'win' : 'loss'
-    );
-
-    // Step 7: post-trade goal/stop check + alert
-    const postTradeRisk = await risk.checkCanTrade(STRATEGY_NAME);
-    if (!postTradeRisk.canTrade) {
-      if (postTradeRisk.reason.includes('profit goal hit') && !updatedState.goalAlertSent) {
-        await telegram.alertDailyGoalHit(STRATEGY_NAME, updatedState.dailyProfit);
-        updatedState.goalAlertSent = true;
-        await memory.saveState(STRATEGY_NAME, updatedState);
-      } else if (postTradeRisk.reason.includes('stop loss hit') && !updatedState.stopLossAlertSent) {
-        await telegram.alertStopLossHit(STRATEGY_NAME, updatedState.dailyLoss);
-        updatedState.stopLossAlertSent = true;
-        await memory.saveState(STRATEGY_NAME, updatedState);
-      } else if (postTradeRisk.reason.includes('cooldown started')) {
-        await telegram.alertPaused(STRATEGY_NAME, postTradeRisk.reason);
-      }
-    }
-
-    await maybeSendEODReport();
-
-    return respond({
-      message: `Trade placed: ${signalResult.signal} - ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
-      signal: signalResult,
-      trade: tradeResult,
-      state: updatedState
-    });
   } catch (err) {
     console.log('driver.js error:', err.message);
-    await memory.clearActiveTrade(STRATEGY_NAME).catch(() => {});
     return respond({ message: 'Error: ' + err.message });
   }
 };
+
+// ---- RISE/FALL branch ----
+async function runRiseFallStrategy(token, app_id, settings) {
+  const STRATEGY_NAME = 'rise_fall';
+  const symbol = settings.symbol;
+
+  const candleAuth = await getOtpWebSocketUrl(token, app_id);
+  const candles = await connectAndGetCandles(candleAuth.wsUrl, symbol);
+  const closes = candles.map((c) => c.close ?? c.Close ?? c[4]);
+
+  const signalResult = riseFallStrategy.getSignal(closes, {
+    emaFastPeriod: settings.emaFastPeriod,
+    emaSlowPeriod: settings.emaSlowPeriod,
+    rsiPeriod: settings.rsiPeriod,
+    rsiOverbought: settings.rsiOverbought,
+    rsiOversold: settings.rsiOversold
+  });
+  console.log('Signal check:', signalResult.reason);
+  if (signalResult.signal) {
+    await memory.appendLog(STRATEGY_NAME, `Signal: ${signalResult.signal} - ${signalResult.reason}`, 'info');
+  }
+
+  if (!signalResult.signal) {
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: 'No trade signal this run', ...signalResult });
+  }
+
+  const riskCheck = await handleRiskGate(STRATEGY_NAME);
+  if (!riskCheck.canTrade) {
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
+  }
+
+  const stake = parseFloat(settings.stakeAmount || 1);
+  await memory.setActiveTrade(STRATEGY_NAME, {
+    direction: signalResult.signal,
+    symbol,
+    stake,
+    placedAt: new Date().toISOString()
+  });
+
+  const tradeAuth = await getOtpWebSocketUrl(token, app_id);
+  const tradeResult = await placeContractAndWait(tradeAuth.wsUrl, {
+    contract_type: signalResult.signal,
+    underlying_symbol: symbol,
+    duration: RISE_FALL_DURATION,
+    duration_unit: RISE_FALL_DURATION_UNIT,
+    basis: 'stake',
+    amount: stake,
+    currency: 'USD'
+  }, stake);
+
+  if (tradeResult.error) {
+    console.log('Trade execution error:', tradeResult.error);
+    await memory.clearActiveTrade(STRATEGY_NAME);
+    return respond({ message: 'Trade failed to execute', error: tradeResult.error });
+  }
+
+  const updatedState = await recordAndLogTrade(STRATEGY_NAME, signalResult.signal, symbol, stake, tradeResult);
+  await handlePostTradeRisk(STRATEGY_NAME, updatedState);
+  await maybeSendEODReport(STRATEGY_NAME);
+
+  return respond({
+    message: `Trade placed: ${signalResult.signal} - ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
+    signal: signalResult,
+    trade: tradeResult,
+    state: updatedState
+  });
+}
+
+// ---- DIGIT branch ----
+async function runDigitStrategy(token, app_id, settings) {
+  const STRATEGY_NAME = 'digit';
+  const symbol = settings.symbol;
+
+  const tickAuth = await getOtpWebSocketUrl(token, app_id);
+  const prices = await connectAndGetTicks(tickAuth.wsUrl, symbol, (settings.digitLookback || 20) + 5);
+
+  const signalResult = digitStrategy.getSignal(prices, {
+    lookback: settings.digitLookback || 20
+  });
+  console.log('Digit signal check:', signalResult.reason);
+  if (signalResult.signal) {
+    await memory.appendLog(STRATEGY_NAME, `Signal: DIFFER from ${signalResult.barrier} - ${signalResult.reason}`, 'info');
+  }
+
+  if (!signalResult.signal) {
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: 'No trade signal this run', ...signalResult });
+  }
+
+  const riskCheck = await handleRiskGate(STRATEGY_NAME);
+  if (!riskCheck.canTrade) {
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
+  }
+
+  const stake = parseFloat(settings.stakeAmount || 1);
+  await memory.setActiveTrade(STRATEGY_NAME, {
+    direction: `DIFFER ${signalResult.barrier}`,
+    symbol,
+    stake,
+    placedAt: new Date().toISOString()
+  });
+
+  const tradeAuth = await getOtpWebSocketUrl(token, app_id);
+  const tradeResult = await placeContractAndWait(tradeAuth.wsUrl, {
+    contract_type: 'DIGITDIFF',
+    underlying_symbol: symbol,
+    duration: DIGIT_DURATION,
+    duration_unit: DIGIT_DURATION_UNIT,
+    barrier: String(signalResult.barrier),
+    basis: 'stake',
+    amount: stake,
+    currency: 'USD'
+  }, stake);
+
+  if (tradeResult.error) {
+    console.log('Trade execution error:', tradeResult.error);
+    await memory.clearActiveTrade(STRATEGY_NAME);
+    return respond({ message: 'Trade failed to execute', error: tradeResult.error });
+  }
+
+  const updatedState = await recordAndLogTrade(STRATEGY_NAME, `DIFFER ${signalResult.barrier}`, symbol, stake, tradeResult);
+  await handlePostTradeRisk(STRATEGY_NAME, updatedState);
+  await maybeSendEODReport(STRATEGY_NAME);
+
+  return respond({
+    message: `Trade placed: DIFFER ${signalResult.barrier} - ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
+    signal: signalResult,
+    trade: tradeResult,
+    state: updatedState
+  });
+}
+
+// ---- Shared helpers ----
+
+async function handleRiskGate(strategyName) {
+  const riskCheck = await risk.checkCanTrade(strategyName);
+  if (!riskCheck.canTrade) {
+    console.log('Blocked by risk.js:', riskCheck.reason);
+
+    if (riskCheck.reason.includes('cooldown started')) {
+      await telegram.alertPaused(strategyName, riskCheck.reason);
+    } else if (riskCheck.reason.includes('profit goal hit')) {
+      const s = await memory.loadState(strategyName);
+      if (!s.goalAlertSent) {
+        await telegram.alertDailyGoalHit(strategyName, s.dailyProfit);
+        s.goalAlertSent = true;
+        await memory.saveState(strategyName, s);
+      }
+    } else if (riskCheck.reason.includes('stop loss hit')) {
+      const s = await memory.loadState(strategyName);
+      if (!s.stopLossAlertSent) {
+        await telegram.alertStopLossHit(strategyName, s.dailyLoss);
+        s.stopLossAlertSent = true;
+        await memory.saveState(strategyName, s);
+      }
+    }
+  }
+  return riskCheck;
+}
+
+async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeResult) {
+  const updatedState = await memory.recordTrade(strategyName, {
+    won: tradeResult.won,
+    profitOrLoss: tradeResult.profit,
+    stake
+  });
+  await memory.setLastTrade(strategyName, {
+    direction,
+    symbol,
+    stake,
+    won: tradeResult.won,
+    profit: tradeResult.profit,
+    settledAt: new Date().toISOString()
+  });
+  await memory.clearActiveTrade(strategyName);
+  await memory.appendLog(
+    strategyName,
+    `${direction} ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
+    tradeResult.won ? 'win' : 'loss'
+  );
+  return updatedState;
+}
+
+async function handlePostTradeRisk(strategyName, updatedState) {
+  const postTradeRisk = await risk.checkCanTrade(strategyName);
+  if (!postTradeRisk.canTrade) {
+    if (postTradeRisk.reason.includes('profit goal hit') && !updatedState.goalAlertSent) {
+      await telegram.alertDailyGoalHit(strategyName, updatedState.dailyProfit);
+      updatedState.goalAlertSent = true;
+      await memory.saveState(strategyName, updatedState);
+    } else if (postTradeRisk.reason.includes('stop loss hit') && !updatedState.stopLossAlertSent) {
+      await telegram.alertStopLossHit(strategyName, updatedState.dailyLoss);
+      updatedState.stopLossAlertSent = true;
+      await memory.saveState(strategyName, updatedState);
+    } else if (postTradeRisk.reason.includes('cooldown started')) {
+      await telegram.alertPaused(strategyName, postTradeRisk.reason);
+    }
+  }
+}
 
 function respond(body) {
   return {
@@ -192,18 +274,17 @@ function respond(body) {
   };
 }
 
-async function maybeSendEODReport() {
-  const state = await memory.loadState(STRATEGY_NAME);
+async function maybeSendEODReport(strategyName) {
+  const state = await memory.loadState(strategyName);
   const now = new Date();
 
   if (now.getUTCHours() >= EOD_HOUR_UTC && !state.eodSent) {
     state.eodSent = true;
-    await memory.saveState(STRATEGY_NAME, state);
-    await telegram.alertEODReport(STRATEGY_NAME, state);
+    await memory.saveState(strategyName, state);
+    await telegram.alertEODReport(strategyName, state);
   }
 }
 
-// Connects using an OTP-embedded URL (already authenticated) and requests candles.
 function connectAndGetCandles(wsUrl, symbol) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
@@ -229,7 +310,6 @@ function connectAndGetCandles(wsUrl, symbol) {
 
     ws.onmessage = (event) => {
       const res = JSON.parse(event.data);
-
       if (res.error) {
         clearTimeout(timeout);
         resolved = true;
@@ -237,7 +317,6 @@ function connectAndGetCandles(wsUrl, symbol) {
         reject(new Error(res.error.message));
         return;
       }
-
       if (res.msg_type === 'candles') {
         clearTimeout(timeout);
         resolved = true;
@@ -256,8 +335,60 @@ function connectAndGetCandles(wsUrl, symbol) {
   });
 }
 
-// Places a CALL or PUT contract using an OTP-embedded URL and waits for settlement.
-function placeTradeAndWait(wsUrl, symbol, direction, stake) {
+function connectAndGetTicks(wsUrl, symbol, count) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    let resolved = false;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.close(); } catch (e) {}
+        reject(new Error('Timeout waiting for tick history'));
+      }
+    }, 8000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        ticks_history: symbol,
+        style: 'ticks',
+        count: count,
+        end: 'latest'
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      const res = JSON.parse(event.data);
+      if (res.error) {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        reject(new Error(res.error.message));
+        return;
+      }
+      if (res.msg_type === 'history') {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        const prices = (res.history && res.history.prices) || (res.data && res.data.history && res.data.history.prices) || [];
+        resolve(prices);
+      }
+    };
+
+    ws.onerror = (err) => {
+      clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        reject(new Error('WS Error: ' + err.message));
+      }
+    };
+  });
+}
+
+// Generic contract placement - works for both rise/fall and digit
+// contracts since the shape of 'parameters' differs but the buy/wait
+// flow is identical.
+function placeContractAndWait(wsUrl, parameters, stake) {
   return new Promise((resolve) => {
     const ws = new WebSocket(wsUrl);
     let resolved = false;
@@ -274,15 +405,7 @@ function placeTradeAndWait(wsUrl, symbol, direction, stake) {
       ws.send(JSON.stringify({
         buy: 1,
         price: stake,
-        parameters: {
-          contract_type: direction, // 'CALL' or 'PUT'
-          underlying_symbol: symbol,
-          duration: CONTRACT_DURATION,
-          duration_unit: CONTRACT_DURATION_UNIT,
-          basis: 'stake',
-          amount: stake,
-          currency: 'USD'
-        }
+        parameters: parameters
       }));
     };
 
