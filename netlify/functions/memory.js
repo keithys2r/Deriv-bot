@@ -32,6 +32,8 @@ function defaultState() {
     tradesToday: 0,
     lastTradeResult: null, // "win" | "loss" | null
     recentEvents: [], // rolling log for the frontend, newest first, capped at 30
+    stopLossAlertSent: false, // prevents re-alerting the same stop-loss hit every run
+    goalAlertSent: false,     // same, for daily profit goal
     lastUpdated: new Date().toISOString()
   };
 }
@@ -131,7 +133,11 @@ function defaultSettings() {
     emaSlowPeriod: 21,
     rsiPeriod: 14,
     rsiOverbought: 70,
-    rsiOversold: 30
+    rsiOversold: 30,
+    dailyProfitGoal: 20,
+    dailyStopLoss: 15,
+    maxConsecutiveLosses: 3,
+    cooldownMinutes: 15
   };
 }
 
