@@ -47,6 +47,16 @@ exports.handler = async function () {
     const settings = await memory.loadSettings();
     const symbol = settings.symbol;
 
+    // Safety net: even if a stake was saved before this validation existed,
+    // never risk more than 20% of the daily stop loss on a single trade.
+    const maxSafeStake = settings.dailyStopLoss * 0.2;
+    if (settings.stakeAmount > maxSafeStake) {
+      console.log(`Stake $${settings.stakeAmount} exceeds safe max $${maxSafeStake}, clamping.`);
+      await memory.appendLog(STRATEGY_NAME, `Stake clamped from $${settings.stakeAmount} to $${maxSafeStake.toFixed(2)} (safety limit)`, 'pause');
+      settings.stakeAmount = maxSafeStake;
+      await memory.saveSettings({ stakeAmount: maxSafeStake });
+    }
+
     // Step 1: fresh OTP + candles
     const candleAuth = await getOtpWebSocketUrl(token, app_id);
     const candles = await connectAndGetCandles(candleAuth.wsUrl, symbol);
@@ -61,7 +71,13 @@ exports.handler = async function () {
       rsiOversold: settings.rsiOversold
     });
     console.log('Signal check:', signalResult.reason);
-    await memory.appendLog(STRATEGY_NAME, signalResult.signal ? `Signal: ${signalResult.signal} - ${signalResult.reason}` : signalResult.reason, 'info');
+
+    // Only write to the live log when something actually happened - a
+    // routine "no crossover" check every minute would flood the log and
+    // bury the events that actually matter.
+    if (signalResult.signal) {
+      await memory.appendLog(STRATEGY_NAME, `Signal: ${signalResult.signal} - ${signalResult.reason}`, 'info');
+    }
 
     if (!signalResult.signal) {
       await maybeSendEODReport();
@@ -77,9 +93,19 @@ exports.handler = async function () {
       if (riskCheck.reason.includes('cooldown started')) {
         await telegram.alertPaused(STRATEGY_NAME, riskCheck.reason);
       } else if (riskCheck.reason.includes('profit goal hit')) {
-        await telegram.alertDailyGoalHit(STRATEGY_NAME, riskCheck.state.dailyProfit);
+        const s = await memory.loadState(STRATEGY_NAME);
+        if (!s.goalAlertSent) {
+          await telegram.alertDailyGoalHit(STRATEGY_NAME, s.dailyProfit);
+          s.goalAlertSent = true;
+          await memory.saveState(STRATEGY_NAME, s);
+        }
       } else if (riskCheck.reason.includes('stop loss hit')) {
-        await telegram.alertStopLossHit(STRATEGY_NAME, riskCheck.state.dailyLoss);
+        const s = await memory.loadState(STRATEGY_NAME);
+        if (!s.stopLossAlertSent) {
+          await telegram.alertStopLossHit(STRATEGY_NAME, s.dailyLoss);
+          s.stopLossAlertSent = true;
+          await memory.saveState(STRATEGY_NAME, s);
+        }
       }
 
       await maybeSendEODReport();
@@ -130,10 +156,14 @@ exports.handler = async function () {
     // Step 7: post-trade goal/stop check + alert
     const postTradeRisk = await risk.checkCanTrade(STRATEGY_NAME);
     if (!postTradeRisk.canTrade) {
-      if (postTradeRisk.reason.includes('profit goal hit')) {
+      if (postTradeRisk.reason.includes('profit goal hit') && !updatedState.goalAlertSent) {
         await telegram.alertDailyGoalHit(STRATEGY_NAME, updatedState.dailyProfit);
-      } else if (postTradeRisk.reason.includes('stop loss hit')) {
+        updatedState.goalAlertSent = true;
+        await memory.saveState(STRATEGY_NAME, updatedState);
+      } else if (postTradeRisk.reason.includes('stop loss hit') && !updatedState.stopLossAlertSent) {
         await telegram.alertStopLossHit(STRATEGY_NAME, updatedState.dailyLoss);
+        updatedState.stopLossAlertSent = true;
+        await memory.saveState(STRATEGY_NAME, updatedState);
       } else if (postTradeRisk.reason.includes('cooldown started')) {
         await telegram.alertPaused(STRATEGY_NAME, postTradeRisk.reason);
       }
