@@ -30,7 +30,9 @@ exports.handler = async function (event) {
     }
 
     const paused = action === 'stop';
-    const state = await memory.setManualPause('rise_fall', paused);
+    const settings = await memory.loadSettings();
+    const strategyName = settings.activeStrategy || 'rise_fall';
+    const state = await memory.setManualPause(strategyName, paused);
 
     return {
       statusCode: 200,
