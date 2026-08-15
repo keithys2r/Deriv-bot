@@ -81,6 +81,11 @@ function getSignal(closes, params) {
   const rsiPeriod = params.rsiPeriod || RSI_PERIOD;
   const rsiOverbought = params.rsiOverbought || RSI_OVERBOUGHT;
   const rsiOversold = params.rsiOversold || RSI_OVERSOLD;
+  // Defaults to true (safer). Set to false to fire on EMA crossovers
+  // alone, without waiting for RSI confirmation - useful for gathering
+  // more trade samples faster, at the cost of the extra filter that
+  // avoids buying into an already-overbought/oversold move.
+  const requireRsiConfirmation = params.requireRsiConfirmation !== false;
 
   const minCandles = Math.max(emaSlowPeriod, rsiPeriod + 1) + 1;
 
@@ -120,21 +125,27 @@ function getSignal(closes, params) {
   };
 
   // Bullish confluence: fast EMA just crossed above slow EMA, RSI not overbought
+  // (unless RSI confirmation is turned off)
   const bullishCross = fastPrev <= slowPrev && fastNow > slowNow;
-  if (bullishCross && rsiNow < rsiOverbought) {
+  if (bullishCross && (!requireRsiConfirmation || rsiNow < rsiOverbought)) {
     return {
       signal: 'CALL',
-      reason: `EMA${emaFastPeriod} crossed above EMA${emaSlowPeriod}, RSI ${rsiNow.toFixed(1)} (not overbought)`,
+      reason: requireRsiConfirmation
+        ? `EMA${emaFastPeriod} crossed above EMA${emaSlowPeriod}, RSI ${rsiNow.toFixed(1)} (not overbought)`
+        : `EMA${emaFastPeriod} crossed above EMA${emaSlowPeriod} (RSI confirmation off, RSI ${rsiNow.toFixed(1)})`,
       details
     };
   }
 
   // Bearish confluence: fast EMA just crossed below slow EMA, RSI not oversold
+  // (unless RSI confirmation is turned off)
   const bearishCross = fastPrev >= slowPrev && fastNow < slowNow;
-  if (bearishCross && rsiNow > rsiOversold) {
+  if (bearishCross && (!requireRsiConfirmation || rsiNow > rsiOversold)) {
     return {
       signal: 'PUT',
-      reason: `EMA${emaFastPeriod} crossed below EMA${emaSlowPeriod}, RSI ${rsiNow.toFixed(1)} (not oversold)`,
+      reason: requireRsiConfirmation
+        ? `EMA${emaFastPeriod} crossed below EMA${emaSlowPeriod}, RSI ${rsiNow.toFixed(1)} (not oversold)`
+        : `EMA${emaFastPeriod} crossed below EMA${emaSlowPeriod} (RSI confirmation off, RSI ${rsiNow.toFixed(1)})`,
       details
     };
   }
