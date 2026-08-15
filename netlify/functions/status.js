@@ -6,14 +6,18 @@ const memory = require('./memory');
 
 exports.handler = async function () {
   try {
-    const state = await memory.loadState('rise_fall');
-    const activeTrade = await memory.getActiveTrade('rise_fall');
-    const lastTrade = await memory.getLastTrade('rise_fall');
+    const settings = await memory.loadSettings();
+    const strategyName = settings.activeStrategy || 'rise_fall';
+
+    const state = await memory.loadState(strategyName);
+    const activeTrade = await memory.getActiveTrade(strategyName);
+    const lastTrade = await memory.getLastTrade(strategyName);
 
     return {
       statusCode: 200,
       headers: { 'Access-Control-Allow-Origin': '*' },
       body: JSON.stringify({
+        activeStrategy: strategyName,
         running: !state.manualPause,
         manualPause: state.manualPause,
         cooldownPaused: state.paused,
