@@ -155,8 +155,17 @@ async function getOtpWebSocketUrl(token, app_id) {
       'Authorization': `Bearer ${token}`
     }
   });
-  const accountsData = await accountsRes.json();
-  console.log('DEBUG accounts response:', JSON.stringify(accountsData).slice(0, 500));
+
+  const accountsRawText = await accountsRes.text();
+  console.log('DEBUG accounts raw status:', accountsRes.status);
+  console.log('DEBUG accounts raw text:', accountsRawText.slice(0, 500));
+
+  let accountsData;
+  try {
+    accountsData = JSON.parse(accountsRawText);
+  } catch (e) {
+    throw new Error(`Accounts endpoint returned non-JSON (status ${accountsRes.status}): ${accountsRawText.slice(0, 200)}`);
+  }
 
   if (!accountsRes.ok) {
     throw new Error('Accounts fetch failed: ' + JSON.stringify(accountsData.errors || accountsData));
@@ -186,8 +195,17 @@ async function getOtpWebSocketUrl(token, app_id) {
       'Authorization': `Bearer ${token}`
     }
   });
-  const otpData = await otpRes.json();
-  console.log('DEBUG otp response:', JSON.stringify(otpData).slice(0, 300));
+
+  const otpRawText = await otpRes.text();
+  console.log('DEBUG otp raw status:', otpRes.status);
+  console.log('DEBUG otp raw text:', otpRawText.slice(0, 300));
+
+  let otpData;
+  try {
+    otpData = JSON.parse(otpRawText);
+  } catch (e) {
+    throw new Error(`OTP endpoint returned non-JSON (status ${otpRes.status}): ${otpRawText.slice(0, 200)}`);
+  }
 
   if (!otpRes.ok) {
     throw new Error('OTP fetch failed: ' + JSON.stringify(otpData.errors || otpData));
