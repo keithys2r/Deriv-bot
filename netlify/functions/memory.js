@@ -119,11 +119,90 @@ async function setManualPause(strategyName, paused) {
   return state;
 }
 
+// Settings are stored separately from strategy state - these are user-
+// configured values (symbol, indicator periods) that don't reset daily.
+const SETTINGS_KEY = 'bot_settings';
+
+function defaultSettings() {
+  return {
+    symbol: 'R_100',
+    stakeAmount: 1,
+    emaFastPeriod: 9,
+    emaSlowPeriod: 21,
+    rsiPeriod: 14,
+    rsiOverbought: 70,
+    rsiOversold: 30
+  };
+}
+
+async function loadSettings() {
+  const store = getMemoryStore();
+  const existing = await store.get(SETTINGS_KEY, { type: 'json' });
+  return existing || defaultSettings();
+}
+
+async function saveSettings(newSettings) {
+  const store = getMemoryStore();
+  const current = await loadSettings();
+  const merged = Object.assign({}, current, newSettings);
+  await store.setJSON(SETTINGS_KEY, merged);
+  return merged;
+}
+
+// Tracks a trade currently in flight (between buy and settlement), so the
+// frontend can show "trade in progress" during that brief window.
+async function setActiveTrade(strategyName, tradeInfo) {
+  const store = getMemoryStore();
+  await store.setJSON(`active_trade_${strategyName}`, tradeInfo);
+}
+
+async function clearActiveTrade(strategyName) {
+  const store = getMemoryStore();
+  try {
+    await store.delete(`active_trade_${strategyName}`);
+  } catch (e) {
+    // already clear, ignore
+  }
+}
+
+async function getActiveTrade(strategyName) {
+  const store = getMemoryStore();
+  try {
+    return await store.get(`active_trade_${strategyName}`, { type: 'json' });
+  } catch (e) {
+    return null;
+  }
+}
+
+// Tracks the most recently completed trade, so the frontend always has
+// something to show even when no trade is currently in flight.
+async function setLastTrade(strategyName, tradeInfo) {
+  const store = getMemoryStore();
+  await store.setJSON(`last_trade_${strategyName}`, tradeInfo);
+}
+
+async function getLastTrade(strategyName) {
+  const store = getMemoryStore();
+  try {
+    return await store.get(`last_trade_${strategyName}`, { type: 'json' });
+  } catch (e) {
+    return null;
+  }
+}
+
 module.exports = {
   loadState,
   saveState,
   recordTrade,
   defaultState,
   appendLog,
-  setManualPause
+  setManualPause,
+  loadSettings,
+  saveSettings,
+  defaultSettings,
+  setActiveTrade,
+  clearActiveTrade,
+  getActiveTrade,
+  setLastTrade,
+  getLastTrade
 };
