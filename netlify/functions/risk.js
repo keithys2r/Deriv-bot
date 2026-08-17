@@ -36,8 +36,14 @@ async function checkCanTrade(strategyName) {
         state
       };
     } else {
+      // Cooldown has been served - give a genuine clean slate. Without
+      // resetting consecutiveLosses here, the very next signal would
+      // immediately re-trigger another cooldown (since that counter only
+      // resets on a WIN), permanently locking the bot out of trading
+      // again after just one loss streak.
       state.paused = false;
       state.pausedUntil = null;
+      state.consecutiveLosses = 0;
       await memory.saveState(strategyName, state);
     }
   }
