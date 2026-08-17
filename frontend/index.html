@@ -731,7 +731,13 @@
         <label>Cooldown (minutes)</label>
         <input type="number" id="cooldownInput" min="1" step="1" value="15">
       </div>
+      <div>
+        <label>Weekly profit goal ($)</label>
+        <input type="number" id="weeklyGoalInput" min="1" step="1" value="100">
+      </div>
     </div>
+    <p class="settings-note" style="text-align:left;margin-top:6px;">Stake automatically scales down as you approach this - 75% size at 50% progress, 50% size at 80% progress. Never scales up. Trading pauses entirely once the goal is hit, resets Monday.</p>
+    <p class="settings-note" style="text-align:left;margin-top:4px;" id="weeklyProgressNote"></p>
 
     <div class="checkbox-row" style="margin-top:12px;">
       <input type="checkbox" id="cooldownEnabledInput" checked>
@@ -893,6 +899,13 @@
     var strategyLabel = data.activeStrategy === 'digit' ? 'DIGIT DIFFER' : 'RISE/FALL';
     document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 DEMO';
 
+    var weeklyNote = document.getElementById('weeklyProgressNote');
+    if (weeklyNote && currentSettings && currentSettings.weeklyProfitGoal) {
+      var wProgress = Math.max(0, (data.weeklyNetProfit / currentSettings.weeklyProfitGoal) * 100);
+      var wSign = data.weeklyNetProfit >= 0 ? '+' : '-';
+      weeklyNote.textContent = 'This week: ' + wSign + '$' + Math.abs(data.weeklyNetProfit).toFixed(2) + ' (' + Math.min(100, Math.round(wProgress)) + '% of goal)';
+    }
+
     var regimeBadge = document.getElementById('regimeBadge');
     if (data.activeStrategy === 'rise_fall' && data.regime) {
       regimeBadge.style.display = 'inline-block';
@@ -1045,6 +1058,7 @@
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
     document.getElementById('maxLossesInput').value = settings.maxConsecutiveLosses;
     document.getElementById('cooldownInput').value = settings.cooldownMinutes;
+    document.getElementById('weeklyGoalInput').value = settings.weeklyProfitGoal || 100;
     document.getElementById('cooldownEnabledInput').checked = settings.cooldownEnabled !== false;
     document.getElementById('autoSelectInput').checked = settings.autoSelectSymbol === true;
 
@@ -1240,6 +1254,7 @@
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
       maxConsecutiveLosses: parseInt(document.getElementById('maxLossesInput').value),
       cooldownMinutes: parseInt(document.getElementById('cooldownInput').value),
+      weeklyProfitGoal: parseFloat(document.getElementById('weeklyGoalInput').value),
       cooldownEnabled: document.getElementById('cooldownEnabledInput').checked,
       autoSelectSymbol: document.getElementById('autoSelectInput').checked,
       watchlist: Array.prototype.map.call(document.querySelectorAll('#watchlistGrid .symbol-chip.selected'), function(c) { return c.getAttribute('data-symbol'); })
