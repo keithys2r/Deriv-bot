@@ -31,6 +31,8 @@ function defaultState() {
     manualPause: false, // true when the user hits STOP on the frontend
     tradesToday: 0,
     lastTradeResult: null, // "win" | "loss" | null
+    consecutiveWins: 0,    // current win streak, resets on any loss
+    longestWinStreak: 0,   // best win streak reached today
     recentEvents: [], // rolling log for the frontend, newest first, capped at 30
     stopLossAlertSent: false, // prevents re-alerting the same stop-loss hit every run
     goalAlertSent: false,     // same, for daily profit goal
@@ -94,10 +96,15 @@ async function recordTrade(strategyName, { won, profitOrLoss, stake }) {
     state.wins += 1;
     state.dailyProfit += safeProfitOrLoss;
     state.consecutiveLosses = 0;
+    state.consecutiveWins = (state.consecutiveWins || 0) + 1;
+    if (state.consecutiveWins > (state.longestWinStreak || 0)) {
+      state.longestWinStreak = state.consecutiveWins;
+    }
   } else {
     state.losses += 1;
     state.dailyLoss += Math.abs(safeProfitOrLoss);
     state.consecutiveLosses += 1;
+    state.consecutiveWins = 0;
   }
 
   // Extra safety net: if dailyProfit/dailyLoss are somehow already
