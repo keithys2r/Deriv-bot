@@ -280,6 +280,37 @@ async function updateRegime(strategyName, adx, trendThreshold, rangeThreshold, t
   return { regime: state.regime, switched, trendCount: state.regimeTrendCount, rangeCount: state.regimeRangeCount };
 }
 
+const LOCK_KEY = 'execution_lock';
+const LOCK_TIMEOUT_MS = 25000; // if a lock is older than this, assume the holder crashed/died and allow a new run
+
+// Prevents two invocations from running the trade logic at the same
+// time - important because Netlify can retry a scheduled function that
+// runs too long, and an overlapping run could place a duplicate trade
+// or race with the original run's state writes (regime counters, etc).
+async function acquireLock() {
+  const store = getMemoryStore();
+  const existing = await store.get(LOCK_KEY, { type: 'json' });
+
+  if (existing && existing.lockedAt) {
+    const age = Date.now() - new Date(existing.lockedAt).getTime();
+    if (age < LOCK_TIMEOUT_MS) {
+      return false; // another invocation is very likely still running
+    }
+  }
+
+  await store.setJSON(LOCK_KEY, { lockedAt: new Date().toISOString() });
+  return true;
+}
+
+async function releaseLock() {
+  const store = getMemoryStore();
+  try {
+    await store.delete(LOCK_KEY);
+  } catch (e) {
+    // already clear, ignore
+  }
+}
+
 module.exports = {
   loadState,
   saveState,
@@ -295,5 +326,7 @@ module.exports = {
   getActiveTrade,
   setLastTrade,
   getLastTrade,
-  updateRegime
+  updateRegime,
+  acquireLock,
+  releaseLock
 };
