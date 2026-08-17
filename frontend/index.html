@@ -579,10 +579,14 @@
           <input type="number" id="rsiOversoldInput" min="0" max="49" value="30">
         </div>
       </div>
-      <div class="checkbox-row">
-        <input type="checkbox" id="rsiConfirmInput" checked>
-        <label for="rsiConfirmInput">Require RSI confirmation on crossover (uncheck to fire on EMA crossover alone - more trades, less filtering)</label>
+      <div id="classicModeFields">
+        <div class="checkbox-row">
+          <input type="checkbox" id="rsiConfirmInput" checked>
+          <label for="rsiConfirmInput">Require RSI confirmation on crossover (uncheck to fire on EMA crossover alone - more trades, less filtering)</label>
+        </div>
+        <p class="settings-note" style="text-align:left;margin-top:4px;">Only applies in Classic mode (below, unchecked) - ignored once Adaptive regime mode is on.</p>
       </div>
+
       <p class="settings-section-label" style="margin-top:14px;">Candle timeframe (seconds)</p>
       <input type="number" id="granularityInput" min="5" max="60" step="5" value="15">
       <p class="settings-note" style="text-align:left;margin-top:6px;">Custom candles built from raw ticks - Deriv's own candles bottom out at 60s. Lower = catches faster moves, but noisier.</p>
@@ -948,6 +952,7 @@
     document.getElementById('biasPeriodInput').value = settings.biasPeriod || 20;
     document.getElementById('biasThresholdInput').value = settings.biasThresholdPct || 0.05;
     document.getElementById('adaptiveRegimeFields').style.display = (settings.useAdaptiveRegime !== false) ? 'block' : 'none';
+    document.getElementById('classicModeFields').style.display = (settings.useAdaptiveRegime !== false) ? 'none' : 'block';
     document.getElementById('digitLookbackInput').value = settings.digitLookback || 20;
     document.getElementById('profitGoalInput').value = settings.dailyProfitGoal;
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
@@ -993,6 +998,7 @@
 
   document.getElementById('adaptiveRegimeInput').addEventListener('change', function() {
     document.getElementById('adaptiveRegimeFields').style.display = this.checked ? 'block' : 'none';
+    document.getElementById('classicModeFields').style.display = this.checked ? 'none' : 'block';
   });
 
   document.getElementById('settingsToggle').addEventListener('click', function() {
