@@ -180,7 +180,7 @@ async function runRiseFallStrategy(token, app_id, settings) {
     return respond({ message: 'Trade failed to execute', error: tradeResult.error });
   }
 
-  const updatedState = await recordAndLogTrade(STRATEGY_NAME, signalResult.signal, symbol, stake, tradeResult);
+  const updatedState = await recordAndLogTrade(STRATEGY_NAME, signalResult.signal, symbol, stake, tradeResult, regime);
   await handlePostTradeRisk(STRATEGY_NAME, updatedState);
   await maybeSendEODReport(STRATEGY_NAME);
 
@@ -285,7 +285,7 @@ async function handleRiskGate(strategyName) {
   return riskCheck;
 }
 
-async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeResult) {
+async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeResult, regime) {
   const updatedState = await memory.recordTrade(strategyName, {
     won: tradeResult.won,
     profitOrLoss: tradeResult.profit,
@@ -305,6 +305,16 @@ async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeRe
     `${direction} ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
     tradeResult.won ? 'win' : 'loss'
   );
+  // Persistent history, separate from the rolling display log - this is
+  // what enables real "when does this bot perform best" analysis later.
+  await memory.recordTradeHistory(strategyName, {
+    symbol,
+    direction,
+    stake,
+    won: tradeResult.won,
+    profit: tradeResult.profit,
+    regime: regime || null
+  });
   await telegram.alertTradeResult(strategyName, direction, symbol, stake, tradeResult.won, tradeResult.profit);
   return updatedState;
 }
