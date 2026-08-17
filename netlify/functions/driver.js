@@ -92,13 +92,19 @@ async function runRiseFallStrategy(token, app_id, settings) {
   // the strategy if the user sets a longer EMA/RSI period than that.
   const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
   const granularitySeconds = settings.candleGranularitySeconds || 15;
-  const lookbackSeconds = neededCandles * granularitySeconds + 60; // small buffer
+
+  // Fetch a fixed NUMBER of raw ticks rather than a time window. A time
+  // window (e.g. "last 5 minutes") assumes a roughly constant tick rate,
+  // which holds for synthetic indices (tick every ~2s nonstop) but not
+  // for real markets like Gold/USD, which can go quiet for stretches -
+  // a fixed tick count adapts naturally to whatever the actual rate is.
+  const tickCount = Math.min(Math.max(neededCandles * 15, 1000), 5000);
 
   // Build candles from raw ticks instead of Deriv's native candle
   // endpoint, which has a 1-minute floor. This lets the strategy react
   // to moves inside a single Deriv-native minute that it would
   // otherwise never see.
-  const tickData = await connectAndGetTicksInRange(candleAuth.wsUrl, symbol, lookbackSeconds);
+  const tickData = await connectAndGetTicksForCandles(candleAuth.wsUrl, symbol, tickCount);
   const candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
   const closes = candles.map((c) => c.close);
 
@@ -355,7 +361,7 @@ async function maybeSendEODReport(strategyName) {
   }
 }
 
-function connectAndGetTicksInRange(wsUrl, symbol, lookbackSeconds) {
+function connectAndGetTicksForCandles(wsUrl, symbol, count) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     let resolved = false;
@@ -369,11 +375,10 @@ function connectAndGetTicksInRange(wsUrl, symbol, lookbackSeconds) {
     }, 8000);
 
     ws.onopen = () => {
-      const startEpoch = Math.floor(Date.now() / 1000) - lookbackSeconds;
       ws.send(JSON.stringify({
         ticks_history: symbol,
         style: 'ticks',
-        start: startEpoch,
+        count: count,
         end: 'latest'
       }));
     };
