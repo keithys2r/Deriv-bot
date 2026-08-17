@@ -160,6 +160,8 @@ function defaultSettings() {
   return {
     activeStrategy: 'rise_fall', // 'rise_fall' | 'digit' - the switch
     symbol: 'R_100',
+    autoSelectSymbol: false,
+    watchlist: ['R_100', 'R_75', 'R_50'],
     stakeAmount: 1,
     emaFastPeriod: 9,
     emaSlowPeriod: 21,
@@ -427,6 +429,54 @@ async function computeStats(strategyName) {
   };
 }
 
+// Per-SYMBOL regime tracking, separate from the daily P&L/risk state -
+// different symbols can genuinely be in different regimes at the same
+// time (Gold trending while Vol 100 ranges), so each needs its own
+// independent hysteresis counters.
+async function getRegimeState(symbol) {
+  const store = getMemoryStore();
+  try {
+    const state = await store.get(`regime_state_${symbol}`, { type: 'json' });
+    return state || { regime: 'range', regimeTrendCount: 0, regimeRangeCount: 0 };
+  } catch (e) {
+    return { regime: 'range', regimeTrendCount: 0, regimeRangeCount: 0 };
+  }
+}
+
+async function updateRegimeForSymbol(symbol, adx, trendThreshold, rangeThreshold, trendConfirmCandles, rangeConfirmCandles) {
+  const store = getMemoryStore();
+  const state = await getRegimeState(symbol);
+
+  if (adx === null || adx === undefined) {
+    return { regime: state.regime || 'range', switched: false };
+  }
+
+  if (adx >= trendThreshold) {
+    state.regimeTrendCount = (state.regimeTrendCount || 0) + 1;
+    state.regimeRangeCount = 0;
+  } else if (adx < rangeThreshold) {
+    state.regimeRangeCount = (state.regimeRangeCount || 0) + 1;
+    state.regimeTrendCount = 0;
+  } else {
+    state.regimeTrendCount = Math.max(0, (state.regimeTrendCount || 0) - 1);
+    state.regimeRangeCount = Math.max(0, (state.regimeRangeCount || 0) - 1);
+  }
+
+  const prevRegime = state.regime || 'range';
+  let switched = false;
+
+  if (prevRegime === 'range' && state.regimeTrendCount >= trendConfirmCandles) {
+    state.regime = 'trend';
+    switched = true;
+  } else if (prevRegime === 'trend' && state.regimeRangeCount >= rangeConfirmCandles) {
+    state.regime = 'range';
+    switched = true;
+  }
+
+  await store.setJSON(`regime_state_${symbol}`, state);
+  return { regime: state.regime, switched };
+}
+
 module.exports = {
   loadState,
   saveState,
@@ -447,5 +497,7 @@ module.exports = {
   releaseLock,
   recordTradeHistory,
   getTradeHistory,
-  computeStats
+  computeStats,
+  getRegimeState,
+  updateRegimeForSymbol
 };
