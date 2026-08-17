@@ -143,7 +143,7 @@ async function runRiseFallStrategy(token, app_id, settings) {
     return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
   }
 
-  const stake = parseFloat(settings.stakeAmount || 1);
+  const stake = await getScaledStake(STRATEGY_NAME, settings);
   await memory.setActiveTrade(STRATEGY_NAME, {
     direction: signalResult.signal,
     symbol,
@@ -265,7 +265,7 @@ async function runDigitStrategy(token, app_id, settings) {
     return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
   }
 
-  const stake = parseFloat(settings.stakeAmount || 1);
+  const stake = await getScaledStake(STRATEGY_NAME, settings);
   await memory.setActiveTrade(STRATEGY_NAME, {
     direction: `DIFFER ${signalResult.barrier}`,
     symbol,
@@ -305,6 +305,26 @@ async function runDigitStrategy(token, app_id, settings) {
 
 // ---- Shared helpers ----
 
+// Applies the weekly de-risk scaling to the base stake - as weekly net
+// profit approaches the weekly goal, stake scales DOWN to protect gains
+// already made. Never scales up, only ever protects.
+async function getScaledStake(strategyName, settings) {
+  const baseStake = parseFloat(settings.stakeAmount || 1);
+  const weeklyProfitGoal = settings.weeklyProfitGoal;
+  if (!weeklyProfitGoal || weeklyProfitGoal <= 0) return baseStake;
+
+  const weeklyState = await memory.loadWeeklyState(strategyName);
+  const weeklyNet = weeklyState.weeklyProfit - weeklyState.weeklyLoss;
+  const scaleFactor = memory.getStakeScaleFactor(weeklyNet, weeklyProfitGoal);
+
+  if (scaleFactor < 1.0) {
+    const scaledStake = Math.max(0.35, baseStake * scaleFactor);
+    console.log(`Weekly progress ${(weeklyNet / weeklyProfitGoal * 100).toFixed(0)}% toward goal - scaling stake from $${baseStake} to $${scaledStake.toFixed(2)}`);
+    return scaledStake;
+  }
+  return baseStake;
+}
+
 async function handleRiskGate(strategyName) {
   const riskCheck = await risk.checkCanTrade(strategyName);
   if (!riskCheck.canTrade) {
@@ -336,6 +356,10 @@ async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeRe
     won: tradeResult.won,
     profitOrLoss: tradeResult.profit,
     stake
+  });
+  await memory.recordWeeklyTrade(strategyName, {
+    won: tradeResult.won,
+    profitOrLoss: tradeResult.profit
   });
   await memory.setLastTrade(strategyName, {
     direction,
