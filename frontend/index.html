@@ -473,6 +473,60 @@
     background: rgba(255, 180, 84, 0.1);
     border: 1px solid var(--phosphor);
   }
+
+  .perf-section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 16px 0 8px;
+  }
+
+  .perf-section-label:first-of-type {
+    margin-top: 4px;
+  }
+
+  .perf-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .perf-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 6px 8px;
+    background: var(--void);
+    border-radius: 5px;
+  }
+
+  .perf-row-label {
+    color: var(--ink-dim);
+  }
+
+  .perf-row-stats {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .perf-winrate {
+    font-weight: 600;
+  }
+
+  .perf-winrate.high { color: var(--green); }
+  .perf-winrate.low { color: var(--red); }
+  .perf-winrate.mid { color: var(--phosphor); }
+
+  .perf-empty {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-dim);
+  }
 </style>
 </head>
 <body>
@@ -680,6 +734,21 @@
     </div>
   </div>
 
+  <button class="settings-toggle" id="performanceToggle" style="margin-top:12px;">Performance breakdown &#9662;</button>
+
+  <div class="log-panel" id="performancePanel" style="display:none;">
+    <p class="log-header" id="perfTotalLine">All-time: --</p>
+
+    <p class="perf-section-label">By hour of day (UTC)</p>
+    <div id="perfByHour" class="perf-list"></div>
+
+    <p class="perf-section-label" id="perfRegimeLabel">By regime</p>
+    <div id="perfByRegime" class="perf-list"></div>
+
+    <p class="perf-section-label">By symbol</p>
+    <div id="perfBySymbol" class="perf-list"></div>
+  </div>
+
 </div>
 
 <script>
@@ -687,9 +756,11 @@
   var CONTROL_URL = '/.netlify/functions/control';
   var BALANCE_URL = '/.netlify/functions/balance';
   var SETTINGS_URL = '/.netlify/functions/settings';
+  var STATS_URL = '/.netlify/functions/stats';
 
   var currentSettings = null;
   var selectedStrategy = 'rise_fall';
+  var statsLoaded = false;
 
   function updateClock() {
     var now = new Date();
@@ -803,6 +874,7 @@
     var dot = document.getElementById('statusDot');
     var statusText = document.getElementById('statusText');
 
+    if (data.activeStrategy) selectedStrategy = data.activeStrategy;
     var strategyLabel = data.activeStrategy === 'digit' ? 'DIGIT DIFFER' : 'RISE/FALL';
     document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 DEMO';
 
@@ -1006,6 +1078,83 @@
     var isHidden = panel.style.display === 'none';
     panel.style.display = isHidden ? 'block' : 'none';
     if (isHidden && !currentSettings) loadSettings();
+  });
+
+  function winRateClass(rate) {
+    if (rate >= 60) return 'high';
+    if (rate < 45) return 'low';
+    return 'mid';
+  }
+
+  function renderPerfList(containerId, dataObj, labelFormatter) {
+    var container = document.getElementById(containerId);
+    var keys = Object.keys(dataObj);
+
+    if (keys.length === 0) {
+      container.innerHTML = '<p class="perf-empty">No trades recorded yet.</p>';
+      return;
+    }
+
+    keys.sort(function(a, b) { return dataObj[b].trades - dataObj[a].trades; });
+
+    container.innerHTML = keys.map(function(k) {
+      var d = dataObj[k];
+      var wr = Math.round(d.winRate);
+      var profitStr = (d.profit >= 0 ? '+' : '-') + '$' + Math.abs(d.profit).toFixed(2);
+      return '<div class="perf-row">' +
+        '<span class="perf-row-label">' + labelFormatter(k) + '</span>' +
+        '<span class="perf-row-stats">' +
+          '<span>' + d.trades + ' trades</span>' +
+          '<span class="perf-winrate ' + winRateClass(d.winRate) + '">' + wr + '%</span>' +
+          '<span>' + profitStr + '</span>' +
+        '</span>' +
+      '</div>';
+    }).join('');
+  }
+
+  function loadStats() {
+    fetch(STATS_URL + '?strategy=' + selectedStrategy)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) {
+          document.getElementById('perfTotalLine').textContent = 'Error loading stats';
+          return;
+        }
+
+        document.getElementById('perfTotalLine').textContent =
+          'All-time: ' + data.totalTrades + ' trades \u00B7 ' + Math.round(data.totalWinRate) + '% win rate \u00B7 ' +
+          (data.totalProfit >= 0 ? '+' : '-') + '$' + Math.abs(data.totalProfit).toFixed(2);
+
+        renderPerfList('perfByHour', data.byHour, function(h) {
+          return h + ':00-' + h + ':59 UTC';
+        });
+
+        var regimeLabel = document.getElementById('perfRegimeLabel');
+        if (data.strategy === 'digit') {
+          regimeLabel.style.display = 'none';
+          document.getElementById('perfByRegime').style.display = 'none';
+        } else {
+          regimeLabel.style.display = 'block';
+          document.getElementById('perfByRegime').style.display = 'flex';
+          renderPerfList('perfByRegime', data.byRegime, function(r) {
+            return r.toUpperCase();
+          });
+        }
+
+        renderPerfList('perfBySymbol', data.bySymbol, function(s) {
+          return SYMBOL_LABELS[s] || s;
+        });
+      })
+      .catch(function() {
+        document.getElementById('perfTotalLine').textContent = 'Failed to load stats';
+      });
+  }
+
+  document.getElementById('performanceToggle').addEventListener('click', function() {
+    var panel = document.getElementById('performancePanel');
+    var isHidden = panel.style.display === 'none';
+    panel.style.display = isHidden ? 'block' : 'none';
+    if (isHidden) loadStats(); // always refresh on open, not just first time
   });
 
   document.getElementById('saveSettingsBtn').addEventListener('click', function() {
