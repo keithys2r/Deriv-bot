@@ -26,6 +26,8 @@ const RISE_FALL_DURATION_UNIT = 't';
 const DIGIT_DURATION = 1; // ticks
 const DIGIT_DURATION_UNIT = 't';
 const EOD_HOUR_UTC = 23;
+const TREND_CONFIRM_CANDLES = 8; // consecutive candles needed to confirm switch into trend regime
+const RANGE_CONFIRM_CANDLES = 5; // consecutive candles needed to confirm switch back to range regime
 // -----------------
 
 exports.handler = async function () {
@@ -83,13 +85,42 @@ async function runRiseFallStrategy(token, app_id, settings) {
   const candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
   const closes = candles.map((c) => c.close);
 
+  // Adaptive regime: compute ADX from real OHLC candles, then update
+  // the persisted trend/range state (hysteresis-based, so it takes
+  // several candles to actually switch regimes).
+  let regime = 'range';
+  let adx = null;
+  if (settings.useAdaptiveRegime !== false) {
+    adx = riseFallStrategy.calculateADX(candles, settings.adxPeriod || 14);
+    const regimeResult = await memory.updateRegime(
+      STRATEGY_NAME,
+      adx,
+      settings.adxTrendThreshold || 35,
+      settings.adxRangeThreshold || 25,
+      TREND_CONFIRM_CANDLES,
+      RANGE_CONFIRM_CANDLES
+    );
+    regime = regimeResult.regime;
+    if (regimeResult.switched) {
+      await memory.appendLog(STRATEGY_NAME, `Regime switched to ${regime.toUpperCase()} (ADX ${adx !== null ? adx.toFixed(1) : '—'})`, 'pause');
+    }
+  }
+
   const signalResult = riseFallStrategy.getSignal(closes, {
     emaFastPeriod: settings.emaFastPeriod,
     emaSlowPeriod: settings.emaSlowPeriod,
     rsiPeriod: settings.rsiPeriod,
     rsiOverbought: settings.rsiOverbought,
     rsiOversold: settings.rsiOversold,
-    requireRsiConfirmation: settings.requireRsiConfirmation
+    requireRsiConfirmation: settings.requireRsiConfirmation,
+    useAdaptiveRegime: settings.useAdaptiveRegime,
+    regime,
+    adx,
+    adxFloorTrend: settings.adxFloorTrend,
+    adxFloorRange: settings.adxFloorRange,
+    biasEnabled: settings.biasEnabled,
+    biasPeriod: settings.biasPeriod,
+    biasThresholdPct: settings.biasThresholdPct
   });
   console.log('Signal check:', signalResult.reason);
   if (signalResult.signal) {
