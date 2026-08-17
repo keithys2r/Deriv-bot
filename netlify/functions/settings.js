@@ -53,6 +53,9 @@ exports.handler = async function (event) {
       if (body.dailyProfitGoal && body.dailyProfitGoal > 0) {
         update.dailyProfitGoal = parseFloat(body.dailyProfitGoal);
       }
+      if (body.weeklyProfitGoal && body.weeklyProfitGoal > 0) {
+        update.weeklyProfitGoal = parseFloat(body.weeklyProfitGoal);
+      }
       if (body.dailyStopLoss && body.dailyStopLoss > 0) {
         update.dailyStopLoss = parseFloat(body.dailyStopLoss);
       }
