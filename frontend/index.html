@@ -603,8 +603,23 @@
       <button type="button" class="strategy-btn" id="digitBtn" data-strategy="digit">Digit Differ</button>
     </div>
 
-    <p class="settings-section-label">Symbol</p>
-    <div class="symbol-grid" id="symbolGrid"></div>
+    <div id="riseFallSymbolSection">
+      <div class="checkbox-row">
+        <input type="checkbox" id="autoSelectInput">
+        <label for="autoSelectInput">Auto-select best symbol - scans 3 watchlist symbols each run, trades whichever has the strongest signal (Rise/Fall only)</label>
+      </div>
+    </div>
+
+    <div id="manualSymbolSection">
+      <p class="settings-section-label">Symbol</p>
+      <div class="symbol-grid" id="symbolGrid"></div>
+    </div>
+
+    <div id="watchlistSection" style="display:none;">
+      <p class="settings-section-label">Watchlist (pick exactly 3)</p>
+      <div class="symbol-grid" id="watchlistGrid"></div>
+      <p class="settings-note" style="text-align:left;margin-top:6px;" id="watchlistCount">0 of 3 selected</p>
+    </div>
 
     <p class="settings-section-label">Stake per trade ($)</p>
     <input type="number" id="stakeInput" min="0.35" step="0.5" value="1">
@@ -991,8 +1006,7 @@
     'R_10': 'Vol 10', 'R_25': 'Vol 25', 'R_50': 'Vol 50',
     'R_75': 'Vol 75', 'R_100': 'Vol 100',
     '1HZ10V': 'Vol 10 (1s)', '1HZ25V': 'Vol 25 (1s)', '1HZ50V': 'Vol 50 (1s)',
-    '1HZ75V': 'Vol 75 (1s)', '1HZ100V': 'Vol 100 (1s)',
-    'frxXAUUSD': 'Gold/USD'
+    '1HZ75V': 'Vol 75 (1s)', '1HZ100V': 'Vol 100 (1s)'
   };
 
   function loadSettings() {
@@ -1032,10 +1046,15 @@
     document.getElementById('maxLossesInput').value = settings.maxConsecutiveLosses;
     document.getElementById('cooldownInput').value = settings.cooldownMinutes;
     document.getElementById('cooldownEnabledInput').checked = settings.cooldownEnabled !== false;
+    document.getElementById('autoSelectInput').checked = settings.autoSelectSymbol === true;
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
     var strategyLabel = selectedStrategy === 'digit' ? 'DIGIT DIFFER' : 'RISE/FALL';
-    document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
+    if (settings.autoSelectSymbol && selectedStrategy === 'rise_fall') {
+      document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 AUTO-SCAN \u00B7 DEMO';
+    } else {
+      document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
+    }
 
     var grid = document.getElementById('symbolGrid');
     grid.innerHTML = allowedSymbols.map(function(sym) {
@@ -1051,6 +1070,31 @@
         chip.classList.add('selected');
       });
     });
+
+    var watchlist = settings.watchlist || ['R_100', 'R_75', 'R_50'];
+    var wGrid = document.getElementById('watchlistGrid');
+    wGrid.innerHTML = allowedSymbols.map(function(sym) {
+      var selected = watchlist.indexOf(sym) !== -1 ? ' selected' : '';
+      return '<button type="button" class="symbol-chip' + selected + '" data-symbol="' + sym + '">' + (SYMBOL_LABELS[sym] || sym) + '</button>';
+    }).join('');
+    updateWatchlistCount();
+
+    Array.prototype.forEach.call(wGrid.querySelectorAll('.symbol-chip'), function(chip) {
+      chip.addEventListener('click', function() {
+        var currentlySelected = wGrid.querySelectorAll('.symbol-chip.selected');
+        if (chip.classList.contains('selected')) {
+          chip.classList.remove('selected');
+        } else if (currentlySelected.length < 3) {
+          chip.classList.add('selected');
+        }
+        updateWatchlistCount();
+      });
+    });
+  }
+
+  function updateWatchlistCount() {
+    var count = document.querySelectorAll('#watchlistGrid .symbol-chip.selected').length;
+    document.getElementById('watchlistCount').textContent = count + ' of 3 selected';
   }
 
   function updateStrategyToggleUI() {
@@ -1058,7 +1102,17 @@
     document.getElementById('digitBtn').className = 'strategy-btn' + (selectedStrategy === 'digit' ? ' selected' : '');
     document.getElementById('riseFallSettings').style.display = selectedStrategy === 'rise_fall' ? 'block' : 'none';
     document.getElementById('digitSettings').style.display = selectedStrategy === 'digit' ? 'block' : 'none';
+    document.getElementById('riseFallSymbolSection').style.display = selectedStrategy === 'rise_fall' ? 'block' : 'none';
+    updateSymbolSectionVisibility();
   }
+
+  function updateSymbolSectionVisibility() {
+    var autoOn = selectedStrategy === 'rise_fall' && document.getElementById('autoSelectInput').checked;
+    document.getElementById('manualSymbolSection').style.display = autoOn ? 'none' : 'block';
+    document.getElementById('watchlistSection').style.display = autoOn ? 'block' : 'none';
+  }
+
+  document.getElementById('autoSelectInput').addEventListener('change', updateSymbolSectionVisibility);
 
   document.getElementById('riseFallBtn').addEventListener('click', function() {
     selectedStrategy = 'rise_fall';
@@ -1186,8 +1240,15 @@
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
       maxConsecutiveLosses: parseInt(document.getElementById('maxLossesInput').value),
       cooldownMinutes: parseInt(document.getElementById('cooldownInput').value),
-      cooldownEnabled: document.getElementById('cooldownEnabledInput').checked
+      cooldownEnabled: document.getElementById('cooldownEnabledInput').checked,
+      autoSelectSymbol: document.getElementById('autoSelectInput').checked,
+      watchlist: Array.prototype.map.call(document.querySelectorAll('#watchlistGrid .symbol-chip.selected'), function(c) { return c.getAttribute('data-symbol'); })
     };
+
+    if (payload.autoSelectSymbol && payload.watchlist.length !== 3) {
+      note.textContent = 'Watchlist needs exactly 3 symbols selected.';
+      return;
+    }
 
     note.textContent = 'Saving...';
 
