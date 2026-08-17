@@ -34,6 +34,9 @@ function defaultState() {
     recentEvents: [], // rolling log for the frontend, newest first, capped at 30
     stopLossAlertSent: false, // prevents re-alerting the same stop-loss hit every run
     goalAlertSent: false,     // same, for daily profit goal
+    regime: 'range',          // current market regime for adaptive rise/fall: 'trend' | 'range'
+    regimeTrendCount: 0,      // consecutive candles ADX has stayed above the trend threshold
+    regimeRangeCount: 0,      // consecutive candles ADX has stayed below the range threshold
     lastUpdated: new Date().toISOString()
   };
 }
@@ -158,6 +161,15 @@ function defaultSettings() {
     rsiOversold: 30,
     requireRsiConfirmation: true,
     candleGranularitySeconds: 15, // custom candle size built from raw ticks - Deriv's native minimum is 60s
+    useAdaptiveRegime: true, // trend/range switching instead of crossover-only
+    adxPeriod: 14,
+    adxTrendThreshold: 35, // ADX needs to stay above this to confirm trend regime
+    adxRangeThreshold: 25, // ADX needs to stay below this to confirm range regime
+    adxFloorTrend: 25,     // minimum ADX required to actually trade in trend regime
+    adxFloorRange: 0,      // minimum ADX required to trade in range regime (0 = disabled)
+    biasEnabled: true,
+    biasPeriod: 20,
+    biasThresholdPct: 0.05,
     digitLookback: 20,
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
@@ -223,6 +235,43 @@ async function getLastTrade(strategyName) {
   }
 }
 
+// Updates the trend/range regime using hysteresis - needs several
+// consecutive candles above/below the ADX thresholds before actually
+// switching, so it doesn't flip-flop on every small wiggle. Ported
+// from the old bot's regime-switching logic.
+async function updateRegime(strategyName, adx, trendThreshold, rangeThreshold, trendConfirmCandles, rangeConfirmCandles) {
+  const state = await loadState(strategyName);
+
+  if (adx === null || adx === undefined) {
+    return { regime: state.regime || 'range', switched: false };
+  }
+
+  if (adx >= trendThreshold) {
+    state.regimeTrendCount = (state.regimeTrendCount || 0) + 1;
+    state.regimeRangeCount = 0;
+  } else if (adx < rangeThreshold) {
+    state.regimeRangeCount = (state.regimeRangeCount || 0) + 1;
+    state.regimeTrendCount = 0;
+  } else {
+    state.regimeTrendCount = Math.max(0, (state.regimeTrendCount || 0) - 1);
+    state.regimeRangeCount = Math.max(0, (state.regimeRangeCount || 0) - 1);
+  }
+
+  const prevRegime = state.regime || 'range';
+  let switched = false;
+
+  if (prevRegime === 'range' && state.regimeTrendCount >= trendConfirmCandles) {
+    state.regime = 'trend';
+    switched = true;
+  } else if (prevRegime === 'trend' && state.regimeRangeCount >= rangeConfirmCandles) {
+    state.regime = 'range';
+    switched = true;
+  }
+
+  await saveState(strategyName, state);
+  return { regime: state.regime, switched, trendCount: state.regimeTrendCount, rangeCount: state.regimeRangeCount };
+}
+
 module.exports = {
   loadState,
   saveState,
@@ -237,5 +286,6 @@ module.exports = {
   clearActiveTrade,
   getActiveTrade,
   setLastTrade,
-  getLastTrade
+  getLastTrade,
+  updateRegime
 };
