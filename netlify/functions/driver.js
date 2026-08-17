@@ -84,92 +84,57 @@ exports.handler = async function () {
 // ---- RISE/FALL branch ----
 async function runRiseFallStrategy(token, app_id, settings) {
   const STRATEGY_NAME = 'rise_fall';
-  const symbol = settings.symbol;
 
-  const candleAuth = await getOtpWebSocketUrl(token, app_id);
-  // Fetch enough candles to cover whatever periods are currently
-  // configured, plus a buffer - a fixed count would silently break
-  // the strategy if the user sets a longer EMA/RSI period than that.
-  const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
-  const granularitySeconds = settings.candleGranularitySeconds || 15;
+  let symbol, signalResult, regime, adx;
 
-  // Fetch a fixed NUMBER of raw ticks rather than a time window. A time
-  // window (e.g. "last 5 minutes") assumes a roughly constant tick rate,
-  // which holds for synthetic indices (tick every ~2s nonstop) but not
-  // for real markets like Gold/USD, which can go quiet for stretches -
-  // a fixed tick count adapts naturally to whatever the actual rate is.
-  const tickCount = Math.min(Math.max(neededCandles * 15, 1000), 5000);
+  if (settings.autoSelectSymbol) {
+    const watchlist = (settings.watchlist && settings.watchlist.length === 3) ? settings.watchlist : ['R_100', 'R_75', 'R_50'];
 
-  // Build candles from raw ticks instead of Deriv's native candle
-  // endpoint, which has a 1-minute floor. This lets the strategy react
-  // to moves inside a single Deriv-native minute that it would
-  // otherwise never see.
-  const tickData = await connectAndGetTicksForCandles(candleAuth.wsUrl, symbol, tickCount);
-  console.log(`DEBUG ticks requested: ${tickCount}, ticks received: ${tickData.prices.length}, symbol: ${symbol}, granularity: ${granularitySeconds}s`);
-  let candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
-  console.log(`DEBUG candles built: ${candles.length}, needed: ${neededCandles}`);
-
-  // Fallback: some symbols (real markets like Gold especially) don't
-  // tick fast enough to fill the needed candle window within Deriv's
-  // ~1000-tick-per-request cap - that ceiling is roughly fixed
-  // regardless of granularity, so more ticks won't fix it. Fall back to
-  // Deriv's own pre-aggregated candles (native 1-min minimum, but not
-  // subject to the same per-request tick cap) rather than fail outright.
-  if (candles.length < neededCandles) {
-    console.log(`Tick-based candles insufficient (${candles.length}/${neededCandles}) - falling back to Deriv's native candles for this run.`);
-    const fallbackAuth = await getOtpWebSocketUrl(token, app_id);
-    const nativeCandles = await connectAndGetNativeCandles(fallbackAuth.wsUrl, symbol, neededCandles);
-    candles = nativeCandles;
-    console.log(`DEBUG native fallback candles: ${candles.length}`);
-  }
-
-  const closes = candles.map((c) => c.close);
-
-  // Adaptive regime: compute ADX from real OHLC candles, then update
-  // the persisted trend/range state (hysteresis-based, so it takes
-  // several candles to actually switch regimes).
-  let regime = 'range';
-  let adx = null;
-  if (settings.useAdaptiveRegime !== false) {
-    adx = riseFallStrategy.calculateADX(candles, settings.adxPeriod || 14);
-    const regimeResult = await memory.updateRegime(
-      STRATEGY_NAME,
-      adx,
-      settings.adxTrendThreshold || 35,
-      settings.adxRangeThreshold || 25,
-      TREND_CONFIRM_CANDLES,
-      RANGE_CONFIRM_CANDLES
+    // Scan all watchlist symbols concurrently - sequential would risk
+    // blowing Netlify's 30s execution ceiling with 3x the fetch time.
+    const scanResults = await Promise.all(
+      watchlist.map((sym) => getSymbolSignal(token, app_id, sym, settings).catch((err) => ({
+        symbol: sym, signal: null, reason: `Scan error: ${err.message}`, adx: null, regime: null
+      })))
     );
-    regime = regimeResult.regime;
-    if (regimeResult.switched) {
-      await memory.appendLog(STRATEGY_NAME, `Regime switched to ${regime.toUpperCase()} (ADX ${adx !== null ? adx.toFixed(1) : '—'})`, 'pause');
+
+    const summary = scanResults.map((r) => `${r.symbol}: ${r.signal ? r.signal : 'no signal'}${r.adx !== null && r.adx !== undefined ? ` (ADX ${r.adx.toFixed(1)})` : ''}`).join(' | ');
+    console.log('Watchlist scan:', summary);
+    await memory.appendLog(STRATEGY_NAME, `Scan: ${summary}`, 'info');
+
+    // Pick the strongest candidate among symbols that actually have a
+    // signal - ranked by ADX (higher = more confident regime read).
+    // Falls back to watchlist order if ADX isn't available (classic mode).
+    const candidates = scanResults.filter((r) => r.signal);
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => (b.adx || 0) - (a.adx || 0));
+      const chosen = candidates[0];
+      symbol = chosen.symbol;
+      signalResult = { signal: chosen.signal, reason: chosen.reason, details: chosen.details };
+      regime = chosen.regime;
+      adx = chosen.adx;
+      console.log(`Chosen: ${symbol} - ${chosen.reason}`);
+      await memory.appendLog(STRATEGY_NAME, `Chosen: ${symbol} - ${chosen.reason}`, 'info');
+    } else {
+      await maybeSendEODReport(STRATEGY_NAME);
+      return respond({ message: 'No trade signal this run (scanned watchlist)', scan: scanResults });
     }
-  }
+  } else {
+    symbol = settings.symbol;
+    const result = await getSymbolSignal(token, app_id, symbol, settings);
+    signalResult = { signal: result.signal, reason: result.reason, details: result.details };
+    regime = result.regime;
+    adx = result.adx;
 
-  const signalResult = riseFallStrategy.getSignal(closes, {
-    emaFastPeriod: settings.emaFastPeriod,
-    emaSlowPeriod: settings.emaSlowPeriod,
-    rsiPeriod: settings.rsiPeriod,
-    rsiOverbought: settings.rsiOverbought,
-    rsiOversold: settings.rsiOversold,
-    requireRsiConfirmation: settings.requireRsiConfirmation,
-    useAdaptiveRegime: settings.useAdaptiveRegime,
-    regime,
-    adx,
-    adxFloorTrend: settings.adxFloorTrend,
-    adxFloorRange: settings.adxFloorRange,
-    biasEnabled: settings.biasEnabled,
-    biasPeriod: settings.biasPeriod,
-    biasThresholdPct: settings.biasThresholdPct
-  });
-  console.log('Signal check:', signalResult.reason);
-  if (signalResult.signal) {
-    await memory.appendLog(STRATEGY_NAME, `Signal: ${signalResult.signal} - ${signalResult.reason}`, 'info');
-  }
+    console.log('Signal check:', signalResult.reason);
+    if (signalResult.signal) {
+      await memory.appendLog(STRATEGY_NAME, `Signal: ${signalResult.signal} - ${signalResult.reason}`, 'info');
+    }
 
-  if (!signalResult.signal) {
-    await maybeSendEODReport(STRATEGY_NAME);
-    return respond({ message: 'No trade signal this run', ...signalResult });
+    if (!signalResult.signal) {
+      await maybeSendEODReport(STRATEGY_NAME);
+      return respond({ message: 'No trade signal this run', ...signalResult });
+    }
   }
 
   const riskCheck = await handleRiskGate(STRATEGY_NAME);
@@ -213,6 +178,64 @@ async function runRiseFallStrategy(token, app_id, settings) {
     trade: tradeResult,
     state: updatedState
   });
+}
+
+// Fetches candles, computes regime (per-symbol, since different symbols
+// can be in different regimes at once), and returns a signal - the core
+// per-symbol logic shared by both manual mode and the watchlist scanner.
+async function getSymbolSignal(token, app_id, symbol, settings) {
+  const candleAuth = await getOtpWebSocketUrl(token, app_id);
+  const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
+  const granularitySeconds = settings.candleGranularitySeconds || 15;
+  const tickCount = Math.min(Math.max(neededCandles * 15, 1000), 5000);
+
+  const tickData = await connectAndGetTicksForCandles(candleAuth.wsUrl, symbol, tickCount);
+  let candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
+
+  if (candles.length < neededCandles) {
+    console.log(`[${symbol}] Tick-based candles insufficient (${candles.length}/${neededCandles}) - falling back to native candles.`);
+    const fallbackAuth = await getOtpWebSocketUrl(token, app_id);
+    candles = await connectAndGetNativeCandles(fallbackAuth.wsUrl, symbol, neededCandles);
+  }
+
+  const closes = candles.map((c) => c.close);
+
+  let regime = 'range';
+  let adx = null;
+  if (settings.useAdaptiveRegime !== false) {
+    adx = riseFallStrategy.calculateADX(candles, settings.adxPeriod || 14);
+    const regimeResult = await memory.updateRegimeForSymbol(
+      symbol,
+      adx,
+      settings.adxTrendThreshold || 35,
+      settings.adxRangeThreshold || 25,
+      TREND_CONFIRM_CANDLES,
+      RANGE_CONFIRM_CANDLES
+    );
+    regime = regimeResult.regime;
+    if (regimeResult.switched) {
+      await memory.appendLog('rise_fall', `[${symbol}] Regime switched to ${regime.toUpperCase()} (ADX ${adx !== null ? adx.toFixed(1) : '—'})`, 'pause');
+    }
+  }
+
+  const signalResult = riseFallStrategy.getSignal(closes, {
+    emaFastPeriod: settings.emaFastPeriod,
+    emaSlowPeriod: settings.emaSlowPeriod,
+    rsiPeriod: settings.rsiPeriod,
+    rsiOverbought: settings.rsiOverbought,
+    rsiOversold: settings.rsiOversold,
+    requireRsiConfirmation: settings.requireRsiConfirmation,
+    useAdaptiveRegime: settings.useAdaptiveRegime,
+    regime,
+    adx,
+    adxFloorTrend: settings.adxFloorTrend,
+    adxFloorRange: settings.adxFloorRange,
+    biasEnabled: settings.biasEnabled,
+    biasPeriod: settings.biasPeriod,
+    biasThresholdPct: settings.biasThresholdPct
+  });
+
+  return { symbol, signal: signalResult.signal, reason: signalResult.reason, details: signalResult.details, regime, adx };
 }
 
 // ---- DIGIT branch ----
