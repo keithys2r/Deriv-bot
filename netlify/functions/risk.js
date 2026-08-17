@@ -71,6 +71,20 @@ async function checkCanTrade(strategyName) {
     };
   }
 
+  // 2b. Weekly profit goal - once fully hit, pause for the rest of the
+  // week rather than keep pushing. Same "stop while ahead" logic as the
+  // daily goal, just at a longer horizon.
+  const weeklyState = await memory.loadWeeklyState(strategyName);
+  const weeklyNet = weeklyState.weeklyProfit - weeklyState.weeklyLoss;
+  const weeklyProfitGoal = settings.weeklyProfitGoal;
+  if (weeklyProfitGoal && weeklyNet >= weeklyProfitGoal) {
+    return {
+      canTrade: false,
+      reason: `Weekly profit goal hit ($${weeklyNet.toFixed(2)} net >= $${weeklyProfitGoal}) - paused until next week`,
+      state
+    };
+  }
+
   // 3. Check daily stop loss
   if (state.dailyLoss >= dailyStopLoss) {
     return {
