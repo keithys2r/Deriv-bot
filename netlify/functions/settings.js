@@ -53,6 +53,7 @@ exports.handler = async function (event) {
       if (body.cooldownMinutes && body.cooldownMinutes >= 1) {
         update.cooldownMinutes = parseInt(body.cooldownMinutes);
       }
+      if (typeof body.cooldownEnabled === 'boolean') update.cooldownEnabled = body.cooldownEnabled;
 
       // Stake validation - a single trade shouldn't be able to eat more
       // than 20% of whatever the daily stop loss ends up being (using the
