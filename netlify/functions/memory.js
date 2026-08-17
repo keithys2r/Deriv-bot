@@ -311,6 +311,122 @@ async function releaseLock() {
   }
 }
 
+const TRADE_HISTORY_MAX = 5000; // caps storage size, still covers weeks of data
+
+// Records a full structured trade record to PERSISTENT history - unlike
+// recentEvents (capped at 30, just for the live display), this keeps
+// growing (up to TRADE_HISTORY_MAX) so real performance analysis is
+// possible later: which hours/regimes/symbols actually perform best.
+async function recordTradeHistory(strategyName, record) {
+  const store = getMemoryStore();
+  const key = `trade_history_${strategyName}`;
+  let history;
+  try {
+    history = await store.get(key, { type: 'json' });
+  } catch (e) {
+    history = null;
+  }
+  history = history || [];
+
+  history.push({
+    time: record.time || new Date().toISOString(),
+    hour: record.hour !== undefined ? record.hour : new Date().getUTCHours(),
+    symbol: record.symbol,
+    strategy: strategyName,
+    regime: record.regime || null,
+    direction: record.direction,
+    stake: record.stake,
+    won: record.won,
+    profit: record.profit
+  });
+
+  if (history.length > TRADE_HISTORY_MAX) {
+    history = history.slice(history.length - TRADE_HISTORY_MAX);
+  }
+
+  await store.setJSON(key, history);
+  return history;
+}
+
+async function getTradeHistory(strategyName) {
+  const store = getMemoryStore();
+  try {
+    const history = await store.get(`trade_history_${strategyName}`, { type: 'json' });
+    return history || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+// Aggregates the full trade history into win rate by hour, by regime,
+// and by symbol - the actual "when does this bot perform best" answer.
+async function computeStats(strategyName) {
+  const history = await getTradeHistory(strategyName);
+
+  const byHour = {}; // hour (0-23) -> { wins, losses, profit }
+  const byRegime = {}; // 'trend' | 'range' -> { wins, losses, profit }
+  const bySymbol = {}; // symbol -> { wins, losses, profit }
+
+  let totalWins = 0;
+  let totalLosses = 0;
+  let totalProfit = 0;
+
+  history.forEach((t) => {
+    const hourKey = t.hour;
+    const regimeKey = t.regime || 'n/a';
+    const symbolKey = t.symbol || 'unknown';
+
+    if (!byHour[hourKey]) byHour[hourKey] = { wins: 0, losses: 0, profit: 0 };
+    if (!byRegime[regimeKey]) byRegime[regimeKey] = { wins: 0, losses: 0, profit: 0 };
+    if (!bySymbol[symbolKey]) bySymbol[symbolKey] = { wins: 0, losses: 0, profit: 0 };
+
+    const p = Number.isFinite(t.profit) ? t.profit : 0;
+
+    if (t.won) {
+      byHour[hourKey].wins++;
+      byRegime[regimeKey].wins++;
+      bySymbol[symbolKey].wins++;
+      totalWins++;
+    } else {
+      byHour[hourKey].losses++;
+      byRegime[regimeKey].losses++;
+      bySymbol[symbolKey].losses++;
+      totalLosses++;
+    }
+
+    byHour[hourKey].profit += p;
+    byRegime[regimeKey].profit += p;
+    bySymbol[symbolKey].profit += p;
+    totalProfit += p;
+  });
+
+  function withWinRate(obj) {
+    const result = {};
+    Object.keys(obj).forEach((k) => {
+      const total = obj[k].wins + obj[k].losses;
+      result[k] = {
+        wins: obj[k].wins,
+        losses: obj[k].losses,
+        trades: total,
+        winRate: total > 0 ? (obj[k].wins / total) * 100 : 0,
+        profit: obj[k].profit
+      };
+    });
+    return result;
+  }
+
+  return {
+    totalTrades: history.length,
+    totalWins,
+    totalLosses,
+    totalWinRate: (totalWins + totalLosses) > 0 ? (totalWins / (totalWins + totalLosses)) * 100 : 0,
+    totalProfit,
+    byHour: withWinRate(byHour),
+    byRegime: withWinRate(byRegime),
+    bySymbol: withWinRate(bySymbol)
+  };
+}
+
 module.exports = {
   loadState,
   saveState,
@@ -328,5 +444,8 @@ module.exports = {
   getLastTrade,
   updateRegime,
   acquireLock,
-  releaseLock
+  releaseLock,
+  recordTradeHistory,
+  getTradeHistory,
+  computeStats
 };
