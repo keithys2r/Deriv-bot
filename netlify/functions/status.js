@@ -1,22 +1,42 @@
-// stats.js
-// Read-only endpoint exposing real performance analysis from PERSISTENT
-// trade history - not the rolling 30-entry display log. Answers "when
-// does this bot actually perform best" (by hour, by regime, by symbol).
+// status.js
+// Read-only endpoint the frontend polls to show real live data.
+// Does NOT connect to Deriv, does NOT place trades - just reads memory.js.
 
 const memory = require('./memory');
 
-exports.handler = async function (event) {
+exports.handler = async function () {
   try {
-    const params = event.queryStringParameters || {};
     const settings = await memory.loadSettings();
-    const strategyName = params.strategy || settings.activeStrategy || 'rise_fall';
+    const strategyName = settings.activeStrategy || 'rise_fall';
 
-    const stats = await memory.computeStats(strategyName);
+    const state = await memory.loadState(strategyName);
+    const activeTrade = await memory.getActiveTrade(strategyName);
+    const lastTrade = await memory.getLastTrade(strategyName);
 
     return {
       statusCode: 200,
       headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ strategy: strategyName, ...stats })
+      body: JSON.stringify({
+        activeStrategy: strategyName,
+        regime: state.regime || null,
+        running: !state.manualPause,
+        manualPause: state.manualPause,
+        cooldownPaused: state.paused,
+        pausedUntil: state.pausedUntil,
+        dailyProfit: state.dailyProfit,
+        dailyLoss: state.dailyLoss,
+        netProfit: state.dailyProfit - state.dailyLoss,
+        wins: state.wins,
+        losses: state.losses,
+        longestWinStreak: state.longestWinStreak || 0,
+        tradesToday: state.tradesToday,
+        winRate: state.tradesToday > 0 ? (state.wins / state.tradesToday) * 100 : 0,
+        lastTradeResult: state.lastTradeResult,
+        recentEvents: state.recentEvents || [],
+        lastUpdated: state.lastUpdated,
+        activeTrade: activeTrade || null,
+        lastTrade: lastTrade || null
+      })
     };
   } catch (err) {
     return {
