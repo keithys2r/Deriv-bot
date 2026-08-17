@@ -75,6 +75,7 @@ async function alertEODReport(strategyName, state) {
     `Trades: ${state.tradesToday}\n` +
     `Wins: ${state.wins} | Losses: ${state.losses}\n` +
     `Win rate: ${winRate}%\n` +
+    `Best win streak: ${state.longestWinStreak || 0}\n` +
     `Profit: $${state.dailyProfit.toFixed(2)}\n` +
     `Loss: $${state.dailyLoss.toFixed(2)}\n` +
     `Net: $${(state.dailyProfit - state.dailyLoss).toFixed(2)}`
