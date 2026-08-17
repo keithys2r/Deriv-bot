@@ -16,6 +16,7 @@ async function checkCanTrade(strategyName) {
   const dailyStopLoss = settings.dailyStopLoss;
   const maxConsecutiveLosses = settings.maxConsecutiveLosses;
   const cooldownMinutes = settings.cooldownMinutes;
+  const cooldownEnabled = settings.cooldownEnabled !== false;
 
   // 0. Manual pause - user hit STOP on the frontend, overrides everything else
   if (state.manualPause) {
@@ -26,8 +27,10 @@ async function checkCanTrade(strategyName) {
     };
   }
 
-  // 1. Check if currently in a cooldown pause
-  if (state.paused && state.pausedUntil) {
+  // 1. Check if currently in a cooldown pause - skipped entirely if the
+  // user has turned the cooldown feature off, including clearing any
+  // pause that was already active when they flipped the switch.
+  if (cooldownEnabled && state.paused && state.pausedUntil) {
     const pausedUntil = new Date(state.pausedUntil);
     if (now < pausedUntil) {
       return {
@@ -46,6 +49,13 @@ async function checkCanTrade(strategyName) {
       state.consecutiveLosses = 0;
       await memory.saveState(strategyName, state);
     }
+  } else if (!cooldownEnabled && state.paused) {
+    // Cooldown feature turned off while a pause was active - clear it
+    // immediately instead of leaving a stale pause the bot can never escape.
+    state.paused = false;
+    state.pausedUntil = null;
+    state.consecutiveLosses = 0;
+    await memory.saveState(strategyName, state);
   }
 
   // 2. Check daily profit goal
@@ -66,8 +76,8 @@ async function checkCanTrade(strategyName) {
     };
   }
 
-  // 4. Check consecutive losses -> trigger new cooldown
-  if (state.consecutiveLosses >= maxConsecutiveLosses) {
+  // 4. Check consecutive losses -> trigger new cooldown (only if enabled)
+  if (cooldownEnabled && state.consecutiveLosses >= maxConsecutiveLosses) {
     const pausedUntil = new Date(now.getTime() + cooldownMinutes * 60 * 1000);
     state.paused = true;
     state.pausedUntil = pausedUntil.toISOString();
