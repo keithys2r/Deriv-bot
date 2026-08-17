@@ -105,7 +105,9 @@ async function runRiseFallStrategy(token, app_id, settings) {
   // to moves inside a single Deriv-native minute that it would
   // otherwise never see.
   const tickData = await connectAndGetTicksForCandles(candleAuth.wsUrl, symbol, tickCount);
+  console.log(`DEBUG ticks requested: ${tickCount}, ticks received: ${tickData.prices.length}, symbol: ${symbol}, granularity: ${granularitySeconds}s`);
   const candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
+  console.log(`DEBUG candles built: ${candles.length}, needed: ${neededCandles}`);
   const closes = candles.map((c) => c.close);
 
   // Adaptive regime: compute ADX from real OHLC candles, then update
