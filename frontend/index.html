@@ -853,7 +853,7 @@
     } else if (data.lastTrade) {
       tradeLabel.textContent = 'Last trade';
       tradeLine.className = 'trade-line ' + (data.lastTrade.won ? 'win' : 'loss');
-      tradeLine.textContent = data.lastTrade.direction + ' on ' + data.lastTrade.symbol + ' - ' + (data.lastTrade.won ? 'WON' : 'LOST') + ' ' + fmtMoney(Math.abs(data.lastTrade.profit)) + ' (' + fmtTime(data.lastTrade.settledAt) + ')';
+      tradeLine.textContent = data.lastTrade.direction + ' on ' + data.lastTrade.symbol + ' - ' + (data.lastTrade.won ? 'WON' : 'LOST') + ' ' + fmtMoney(data.lastTrade.profit) + ' (' + fmtTime(data.lastTrade.settledAt) + ')';
     } else {
       tradeLabel.textContent = 'Last trade';
       tradeLine.className = 'trade-line';
