@@ -106,8 +106,23 @@ async function runRiseFallStrategy(token, app_id, settings) {
   // otherwise never see.
   const tickData = await connectAndGetTicksForCandles(candleAuth.wsUrl, symbol, tickCount);
   console.log(`DEBUG ticks requested: ${tickCount}, ticks received: ${tickData.prices.length}, symbol: ${symbol}, granularity: ${granularitySeconds}s`);
-  const candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
+  let candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
   console.log(`DEBUG candles built: ${candles.length}, needed: ${neededCandles}`);
+
+  // Fallback: some symbols (real markets like Gold especially) don't
+  // tick fast enough to fill the needed candle window within Deriv's
+  // ~1000-tick-per-request cap - that ceiling is roughly fixed
+  // regardless of granularity, so more ticks won't fix it. Fall back to
+  // Deriv's own pre-aggregated candles (native 1-min minimum, but not
+  // subject to the same per-request tick cap) rather than fail outright.
+  if (candles.length < neededCandles) {
+    console.log(`Tick-based candles insufficient (${candles.length}/${neededCandles}) - falling back to Deriv's native candles for this run.`);
+    const fallbackAuth = await getOtpWebSocketUrl(token, app_id);
+    const nativeCandles = await connectAndGetNativeCandles(fallbackAuth.wsUrl, symbol, neededCandles);
+    candles = nativeCandles;
+    console.log(`DEBUG native fallback candles: ${candles.length}`);
+  }
+
   const closes = candles.map((c) => c.close);
 
   // Adaptive regime: compute ADX from real OHLC candles, then update
@@ -361,6 +376,68 @@ async function maybeSendEODReport(strategyName) {
     await memory.saveState(strategyName, state);
     await telegram.alertEODReport(strategyName, state);
   }
+}
+
+// Fallback used when tick-based candle building can't supply enough
+// history (see above) - fetches Deriv's own pre-aggregated candles.
+// Minimum granularity is 60s (Deriv's own floor), so this loses the
+// sub-1-minute precision of the custom tick-built candles, but it's not
+// subject to the same ~1000-tick-per-request cap.
+function connectAndGetNativeCandles(wsUrl, symbol, count) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    let resolved = false;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.close(); } catch (e) {}
+        reject(new Error('Timeout waiting for native candle history'));
+      }
+    }, 8000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        ticks_history: symbol,
+        style: 'candles',
+        granularity: 60,
+        count: count,
+        end: 'latest'
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      const res = JSON.parse(event.data);
+      if (res.error) {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        reject(new Error(res.error.message));
+        return;
+      }
+      if (res.msg_type === 'candles') {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        const rawCandles = res.candles || (res.data && res.data.candles) || [];
+        resolve(rawCandles.map((c) => ({
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          epoch: c.epoch
+        })));
+      }
+    };
+
+    ws.onerror = (err) => {
+      clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        reject(new Error('WS Error: ' + err.message));
+      }
+    };
+  });
 }
 
 function connectAndGetTicksForCandles(wsUrl, symbol, count) {
