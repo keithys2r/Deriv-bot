@@ -4,9 +4,19 @@
 // Used by driver.js and balance.js so this logic lives in one place.
 
 const API_BASE = 'https://api.derivws.com';
+const REST_TIMEOUT_MS = 6000; // each REST call gets its own hard timeout,
+                               // since fetch() has no built-in one and a
+                               // hang here could push total execution
+                               // past Netlify's 30s scheduled function limit
+
+function fetchWithTimeout(url, options) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REST_TIMEOUT_MS);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
+}
 
 async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
-  const accountsRes = await fetch(`${API_BASE}/trading/v1/options/accounts`, {
+  const accountsRes = await fetchWithTimeout(`${API_BASE}/trading/v1/options/accounts`, {
     headers: {
       'Deriv-App-ID': app_id,
       'Authorization': `Bearer ${token}`
@@ -40,7 +50,7 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
     throw new Error('Could not determine account ID from: ' + JSON.stringify(targetAccount));
   }
 
-  const otpRes = await fetch(`${API_BASE}/trading/v1/options/accounts/${accountId}/otp`, {
+  const otpRes = await fetchWithTimeout(`${API_BASE}/trading/v1/options/accounts/${accountId}/otp`, {
     method: 'POST',
     headers: {
       'Deriv-App-ID': app_id,
