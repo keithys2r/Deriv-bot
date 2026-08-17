@@ -56,6 +56,11 @@ exports.handler = async function () {
     const settings = await memory.loadSettings();
     const strategyName = settings.activeStrategy || 'rise_fall';
 
+    // Recover from a previous run that died mid-trade before this run
+    // does anything else - a killed function can leave a contract open
+    // on Deriv with nothing tracking it locally otherwise.
+    await reconcileOrphanedTrade(token, app_id, strategyName);
+
     // Safety net: never let a single trade risk more than 20% of the
     // daily stop loss, regardless of what got saved.
     const maxSafeStake = settings.dailyStopLoss * 0.2;
@@ -148,6 +153,7 @@ async function runRiseFallStrategy(token, app_id, settings) {
     direction: signalResult.signal,
     symbol,
     stake,
+    regime,
     placedAt: new Date().toISOString()
   });
 
@@ -160,11 +166,32 @@ async function runRiseFallStrategy(token, app_id, settings) {
     basis: 'stake',
     amount: stake,
     currency: 'USD'
-  }, stake);
+  }, stake, (contractId) => {
+    // Fires as soon as the buy confirms, BEFORE waiting for settlement -
+    // persists the contract ID immediately so a crash mid-wait leaves
+    // enough info to recover the real outcome on a later run, instead
+    // of an untraceable orphaned trade.
+    memory.setActiveTrade(STRATEGY_NAME, {
+      direction: signalResult.signal,
+      symbol,
+      stake,
+      regime,
+      contractId,
+      placedAt: new Date().toISOString()
+    }).catch((e) => console.log('Failed to persist contract ID:', e.message));
+  });
 
   if (tradeResult.error) {
     console.log('Trade execution error:', tradeResult.error);
-    await memory.clearActiveTrade(STRATEGY_NAME);
+    if (!tradeResult.contractPlaced) {
+      // Buy itself failed - nothing was actually placed on Deriv, safe to clear.
+      await memory.clearActiveTrade(STRATEGY_NAME);
+    } else {
+      // Buy succeeded but settlement wait timed out - the contract IS
+      // real and open on Deriv. Do NOT clear the marker; the next run's
+      // reconciliation step will look it up and record the real outcome.
+      console.log('Contract was placed but settlement wait timed out - leaving active trade marker for reconciliation next run.');
+    }
     return respond({ message: 'Trade failed to execute', error: tradeResult.error });
   }
 
@@ -283,11 +310,23 @@ async function runDigitStrategy(token, app_id, settings) {
     basis: 'stake',
     amount: stake,
     currency: 'USD'
-  }, stake);
+  }, stake, (contractId) => {
+    memory.setActiveTrade(STRATEGY_NAME, {
+      direction: `DIFFER ${signalResult.barrier}`,
+      symbol,
+      stake,
+      contractId,
+      placedAt: new Date().toISOString()
+    }).catch((e) => console.log('Failed to persist contract ID:', e.message));
+  });
 
   if (tradeResult.error) {
     console.log('Trade execution error:', tradeResult.error);
-    await memory.clearActiveTrade(STRATEGY_NAME);
+    if (!tradeResult.contractPlaced) {
+      await memory.clearActiveTrade(STRATEGY_NAME);
+    } else {
+      console.log('Contract was placed but settlement wait timed out - leaving active trade marker for reconciliation next run.');
+    }
     return respond({ message: 'Trade failed to execute', error: tradeResult.error });
   }
 
@@ -403,6 +442,118 @@ async function handlePostTradeRisk(strategyName, updatedState) {
     } else if (postTradeRisk.reason.includes('cooldown started')) {
       await telegram.alertPaused(strategyName, postTradeRisk.reason);
     }
+  }
+}
+
+// Checks a specific contract's current status on Deriv - used to
+// recover the real outcome of a trade that was placed by a previous
+// run that died before recording the result. Resolves once, doesn't
+// wait indefinitely for settlement like placeContractAndWait does.
+function queryContractStatus(wsUrl, contractId) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    let resolved = false;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.close(); } catch (e) {}
+        reject(new Error('Timeout querying contract status'));
+      }
+    }, 8000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        proposal_open_contract: 1,
+        contract_id: contractId
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      const res = JSON.parse(event.data);
+
+      if (res.error) {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        reject(new Error(res.error.message));
+        return;
+      }
+
+      if (res.msg_type === 'proposal_open_contract') {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        const contract = res.proposal_open_contract;
+        if (!contract || Object.keys(contract).length === 0) {
+          reject(new Error('Contract not found on Deriv'));
+          return;
+        }
+        const rawProfit = contract.profit;
+        const profit = Number.isFinite(rawProfit) ? rawProfit : 0;
+        resolve({ isSold: !!contract.is_sold, profit });
+      }
+    };
+
+    ws.onerror = (err) => {
+      clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        reject(new Error('WS Error: ' + err.message));
+      }
+    };
+  });
+}
+
+// Recovers from a previous run dying mid-trade. Checks for a leftover
+// active trade marker; if one exists with a contract ID and has had
+// enough time to settle, queries Deriv directly for what actually
+// happened and records the REAL outcome instead of losing it silently.
+async function reconcileOrphanedTrade(token, app_id, strategyName) {
+  const active = await memory.getActiveTrade(strategyName);
+  if (!active) return;
+
+  const ageMs = Date.now() - new Date(active.placedAt).getTime();
+
+  if (!active.contractId) {
+    // Died before we even got a contract ID back - nothing to look up.
+    // Give it a grace period in case a concurrent run is still mid-buy,
+    // then give up and clear it so it doesn't block forever.
+    if (ageMs > 5 * 60 * 1000) {
+      console.log(`WARNING: Orphaned active trade with no contract ID (${strategyName}), age ${(ageMs / 1000).toFixed(0)}s - clearing, outcome unknown.`);
+      await memory.appendLog(strategyName, `Orphaned trade cleared (no contract ID, outcome unknown)`, 'pause');
+      await memory.clearActiveTrade(strategyName);
+    }
+    return;
+  }
+
+  if (ageMs < 30000) {
+    // Still within a normal settlement window - could genuinely still
+    // be in-flight from a run that's about to finish normally. Don't
+    // touch it yet.
+    return;
+  }
+
+  console.log(`Reconciling orphaned trade: contract ${active.contractId}, age ${(ageMs / 1000).toFixed(0)}s`);
+
+  try {
+    const auth = await getOtpWebSocketUrl(token, app_id);
+    const result = await queryContractStatus(auth.wsUrl, active.contractId);
+
+    if (result.isSold) {
+      await recordAndLogTrade(strategyName, active.direction, active.symbol, active.stake, {
+        won: result.profit > 0,
+        profit: result.profit
+      }, active.regime || null);
+      console.log(`Recovered orphaned trade: ${result.profit > 0 ? 'WON' : 'LOST'} $${Math.abs(result.profit).toFixed(2)}`);
+      await memory.appendLog(strategyName, `Recovered orphaned trade: ${result.profit > 0 ? 'WON' : 'LOST'} $${Math.abs(result.profit).toFixed(2)}`, result.profit > 0 ? 'win' : 'loss');
+    } else {
+      console.log('Orphaned trade still open on Deriv - leaving it, will check again next run.');
+    }
+  } catch (err) {
+    console.log(`WARNING: Could not reconcile orphaned trade ${active.contractId}: ${err.message} - clearing marker, outcome unknown.`);
+    await memory.appendLog(strategyName, `Could not verify orphaned trade (${err.message}) - cleared, outcome unknown`, 'pause');
+    await memory.clearActiveTrade(strategyName);
   }
 }
 
@@ -622,17 +773,23 @@ function connectAndGetTicks(wsUrl, symbol, count) {
 
 // Generic contract placement - works for both rise/fall and digit
 // contracts since the shape of 'parameters' differs but the buy/wait
-// flow is identical.
-function placeContractAndWait(wsUrl, parameters, stake) {
+// flow is identical. onBought(contractId) fires as soon as the buy
+// confirms, BEFORE waiting for settlement, so the caller can persist
+// the contract ID immediately - critical for recovering the real
+// outcome later if this function dies before settlement completes.
+function placeContractAndWait(wsUrl, parameters, stake, onBought) {
   return new Promise((resolve) => {
     const ws = new WebSocket(wsUrl);
     let resolved = false;
+    let contractPlaced = false; // true once Deriv confirms the buy - tells
+                                 // the caller whether a real contract is
+                                 // open even if we later fail/time out
 
     const timeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
         try { ws.close(); } catch (e) {}
-        resolve({ error: 'Timeout waiting for trade to settle' });
+        resolve({ error: 'Timeout waiting for trade to settle', contractPlaced });
       }
     }, 20000);
 
@@ -651,12 +808,16 @@ function placeContractAndWait(wsUrl, parameters, stake) {
         clearTimeout(timeout);
         resolved = true;
         ws.close();
-        resolve({ error: res.error.message });
+        resolve({ error: res.error.message, contractPlaced });
         return;
       }
 
       if (res.msg_type === 'buy') {
         const contractId = res.buy.contract_id;
+        contractPlaced = true;
+        if (onBought) {
+          try { onBought(contractId); } catch (e) { console.log('onBought callback error:', e.message); }
+        }
         ws.send(JSON.stringify({
           proposal_open_contract: 1,
           contract_id: contractId,
@@ -692,7 +853,7 @@ function placeContractAndWait(wsUrl, parameters, stake) {
       clearTimeout(timeout);
       if (!resolved) {
         resolved = true;
-        resolve({ error: 'WS Error: ' + err.message });
+        resolve({ error: 'WS Error: ' + err.message, contractPlaced });
       }
     };
   });
