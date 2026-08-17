@@ -523,6 +523,10 @@
       <p class="stat-label">Record</p>
       <p class="stat-value neutral" id="record">0W / 0L</p>
     </div>
+    <div class="stat-card">
+      <p class="stat-label">Best win streak</p>
+      <p class="stat-value neutral" id="bestStreak">0</p>
+    </div>
   </div>
 
   <div class="trade-card" id="tradeCard">
@@ -825,6 +829,7 @@
     document.getElementById('winRate').textContent = Math.round(data.winRate) + '%';
     document.getElementById('tradesToday').textContent = data.tradesToday;
     document.getElementById('record').textContent = data.wins + 'W / ' + data.losses + 'L';
+    document.getElementById('bestStreak').textContent = data.longestWinStreak || 0;
 
     document.getElementById('startBtn').className = 'btn-start' + (!data.manualPause ? ' active' : '');
     document.getElementById('stopBtn').className = 'btn-stop' + (data.manualPause ? ' active' : '');
