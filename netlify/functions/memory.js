@@ -174,7 +174,8 @@ function defaultSettings() {
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
     maxConsecutiveLosses: 3,
-    cooldownMinutes: 15
+    cooldownMinutes: 15,
+    cooldownEnabled: true
   };
 }
 
