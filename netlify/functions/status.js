@@ -28,6 +28,7 @@ exports.handler = async function () {
         netProfit: state.dailyProfit - state.dailyLoss,
         wins: state.wins,
         losses: state.losses,
+        longestWinStreak: state.longestWinStreak || 0,
         tradesToday: state.tradesToday,
         winRate: state.tradesToday > 0 ? (state.wins / state.tradesToday) * 100 : 0,
         lastTradeResult: state.lastTradeResult,
