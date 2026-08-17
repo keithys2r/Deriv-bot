@@ -6,7 +6,7 @@
 
 const memory = require('./memory');
 
-const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ25V', '1HZ50V', '1HZ75V', '1HZ100V', 'frxXAUUSD'];
+const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ25V', '1HZ50V', '1HZ75V', '1HZ100V'];
 
 exports.handler = async function (event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -32,6 +32,15 @@ exports.handler = async function (event) {
       const update = {};
 
       if (body.symbol && ALLOWED_SYMBOLS.includes(body.symbol)) update.symbol = body.symbol;
+      if (typeof body.autoSelectSymbol === 'boolean') update.autoSelectSymbol = body.autoSelectSymbol;
+      if (Array.isArray(body.watchlist)) {
+        const validWatchlist = body.watchlist.filter((s) => ALLOWED_SYMBOLS.includes(s));
+        if (validWatchlist.length === 3) {
+          update.watchlist = validWatchlist;
+        } else if (validWatchlist.length > 0) {
+          return respond({ error: `Watchlist needs exactly 3 valid symbols, got ${validWatchlist.length}.` });
+        }
+      }
       if (body.activeStrategy === 'rise_fall' || body.activeStrategy === 'digit') {
         update.activeStrategy = body.activeStrategy;
       }
