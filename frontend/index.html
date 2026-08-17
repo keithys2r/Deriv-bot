@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -657,6 +656,11 @@
       </div>
     </div>
 
+    <div class="checkbox-row" style="margin-top:12px;">
+      <input type="checkbox" id="cooldownEnabledInput" checked>
+      <label for="cooldownEnabledInput">Cooldown after consecutive losses - uncheck to disable entirely (bot keeps trading through loss streaks, no automatic pause)</label>
+    </div>
+
     <button class="save-settings-btn" id="saveSettingsBtn">Save settings</button>
     <p class="settings-note" id="settingsNote"></p>
   </div>
@@ -944,6 +948,7 @@
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
     document.getElementById('maxLossesInput').value = settings.maxConsecutiveLosses;
     document.getElementById('cooldownInput').value = settings.cooldownMinutes;
+    document.getElementById('cooldownEnabledInput').checked = settings.cooldownEnabled !== false;
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
     var strategyLabel = selectedStrategy === 'digit' ? 'DIGIT DIFFER' : 'RISE/FALL';
@@ -1019,7 +1024,8 @@
       dailyProfitGoal: parseFloat(document.getElementById('profitGoalInput').value),
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
       maxConsecutiveLosses: parseInt(document.getElementById('maxLossesInput').value),
-      cooldownMinutes: parseInt(document.getElementById('cooldownInput').value)
+      cooldownMinutes: parseInt(document.getElementById('cooldownInput').value),
+      cooldownEnabled: document.getElementById('cooldownEnabledInput').checked
     };
 
     note.textContent = 'Saving...';
