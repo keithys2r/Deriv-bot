@@ -58,11 +58,15 @@ async function checkCanTrade(strategyName) {
     await memory.saveState(strategyName, state);
   }
 
-  // 2. Check daily profit goal
-  if (state.dailyProfit >= dailyProfitGoal) {
+  // 2. Check daily profit goal - based on NET profit (wins minus
+  // losses), matching what's actually happened to the account. Checking
+  // gross wins alone would let this trigger even while net flat or down,
+  // since losses were never subtracted from that number.
+  const netProfit = state.dailyProfit - state.dailyLoss;
+  if (netProfit >= dailyProfitGoal) {
     return {
       canTrade: false,
-      reason: `Daily profit goal hit ($${state.dailyProfit.toFixed(2)} >= $${dailyProfitGoal})`,
+      reason: `Daily profit goal hit ($${netProfit.toFixed(2)} net >= $${dailyProfitGoal})`,
       state
     };
   }
