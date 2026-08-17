@@ -182,6 +182,7 @@ function defaultSettings() {
     digitLookback: 20,
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
+    weeklyProfitGoal: 100,
     maxConsecutiveLosses: 3,
     cooldownMinutes: 15,
     cooldownEnabled: true
@@ -477,6 +478,64 @@ async function updateRegimeForSymbol(symbol, adx, trendThreshold, rangeThreshold
   return { regime: state.regime, switched };
 }
 
+// ---- Weekly profit tracking (separate from daily state) ----
+// Powers the "de-risk as you approach your weekly target" feature -
+// stake scales DOWN as you get closer to the goal, protecting gains
+// already made rather than pushing harder to close it out.
+
+function getWeekStartUTC(date) {
+  const d = date || new Date();
+  const day = d.getUTCDay(); // 0=Sun, 1=Mon, ... 6=Sat
+  const diffToMonday = day === 0 ? 6 : day - 1; // days since most recent Monday
+  const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - diffToMonday));
+  return monday.toISOString().slice(0, 10);
+}
+
+async function loadWeeklyState(strategyName) {
+  const store = getMemoryStore();
+  const key = `weekly_state_${strategyName}`;
+  const existing = await store.get(key, { type: 'json' });
+  const currentWeekStart = getWeekStartUTC();
+
+  if (!existing || existing.weekStart !== currentWeekStart) {
+    return { weekStart: currentWeekStart, weeklyProfit: 0, weeklyLoss: 0 };
+  }
+  return existing;
+}
+
+async function saveWeeklyState(strategyName, state) {
+  const store = getMemoryStore();
+  await store.setJSON(`weekly_state_${strategyName}`, state);
+}
+
+async function recordWeeklyTrade(strategyName, { won, profitOrLoss }) {
+  const state = await loadWeeklyState(strategyName);
+  const safeProfitOrLoss = Number.isFinite(profitOrLoss) ? profitOrLoss : 0;
+
+  if (won) {
+    state.weeklyProfit += safeProfitOrLoss;
+  } else {
+    state.weeklyLoss += Math.abs(safeProfitOrLoss);
+  }
+
+  if (!Number.isFinite(state.weeklyProfit)) state.weeklyProfit = 0;
+  if (!Number.isFinite(state.weeklyLoss)) state.weeklyLoss = 0;
+
+  await saveWeeklyState(strategyName, state);
+  return state;
+}
+
+// Returns a multiplier (1.0, 0.75, 0.5) applied to stake based on how
+// close weekly net profit is to the weekly goal - never scales UP,
+// only ever protects gains by sizing down as the target nears.
+function getStakeScaleFactor(weeklyNetProfit, weeklyProfitGoal) {
+  if (!weeklyProfitGoal || weeklyProfitGoal <= 0) return 1.0;
+  const progress = weeklyNetProfit / weeklyProfitGoal;
+  if (progress >= 0.8) return 0.5;
+  if (progress >= 0.5) return 0.75;
+  return 1.0;
+}
+
 module.exports = {
   loadState,
   saveState,
@@ -499,5 +558,10 @@ module.exports = {
   getTradeHistory,
   computeStats,
   getRegimeState,
-  updateRegimeForSymbol
+  updateRegimeForSymbol,
+  getWeekStartUTC,
+  loadWeeklyState,
+  saveWeeklyState,
+  recordWeeklyTrade,
+  getStakeScaleFactor
 };
