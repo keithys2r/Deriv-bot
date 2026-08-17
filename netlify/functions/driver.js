@@ -39,6 +39,17 @@ exports.handler = async function () {
     return { statusCode: 200, body: JSON.stringify({ message: 'No token configured' }) };
   }
 
+  // Prevent overlapping runs. Netlify can retry a scheduled function
+  // that runs too long (30s limit), and if the retry starts while the
+  // original run is still mid-trade, both could try to place a trade
+  // or write conflicting state. If a lock is already held (meaning a
+  // very recent invocation is still active), skip this run entirely.
+  const gotLock = await memory.acquireLock();
+  if (!gotLock) {
+    console.log('Skipped run - another invocation appears to still be in progress.');
+    return { statusCode: 200, body: JSON.stringify({ message: 'Skipped - overlapping invocation detected' }) };
+  }
+
   try {
     const settings = await memory.loadSettings();
     const strategyName = settings.activeStrategy || 'rise_fall';
@@ -61,6 +72,10 @@ exports.handler = async function () {
   } catch (err) {
     console.log('driver.js error:', err.message);
     return respond({ message: 'Error: ' + err.message });
+  } finally {
+    // Always release, even if something above threw or timed out,
+    // otherwise every future run stays locked out forever.
+    await memory.releaseLock();
   }
 };
 
@@ -339,7 +354,7 @@ function connectAndGetTicksInRange(wsUrl, symbol, lookbackSeconds) {
         try { ws.close(); } catch (e) {}
         reject(new Error('Timeout waiting for tick history'));
       }
-    }, 10000);
+    }, 8000);
 
     ws.onopen = () => {
       const startEpoch = Math.floor(Date.now() / 1000) - lookbackSeconds;
@@ -476,7 +491,7 @@ function placeContractAndWait(wsUrl, parameters, stake) {
         try { ws.close(); } catch (e) {}
         resolve({ error: 'Timeout waiting for trade to settle' });
       }
-    }, 20000);
+    }, 14000);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({
