@@ -522,9 +522,9 @@ async function getRegimeState(symbol) {
   const store = getMemoryStore();
   try {
     const state = await store.get(`regime_state_${symbol}`, { type: 'json' });
-    return state || { regime: 'range', regimeTrendCount: 0, regimeRangeCount: 0 };
+    return state || { regime: 'range', regimeTrendCount: 0, regimeRangeCount: 0, tradedThisEpisode: false };
   } catch (e) {
-    return { regime: 'range', regimeTrendCount: 0, regimeRangeCount: 0 };
+    return { regime: 'range', regimeTrendCount: 0, regimeRangeCount: 0, tradedThisEpisode: false };
   }
 }
 
@@ -533,7 +533,7 @@ async function updateRegimeForSymbol(symbol, adx, trendThreshold, rangeThreshold
   const state = await getRegimeState(symbol);
 
   if (adx === null || adx === undefined) {
-    return { regime: state.regime || 'range', switched: false };
+    return { regime: state.regime || 'range', switched: false, tradedThisEpisode: state.tradedThisEpisode || false };
   }
 
   if (adx >= trendThreshold) {
@@ -558,8 +558,27 @@ async function updateRegimeForSymbol(symbol, adx, trendThreshold, rangeThreshold
     switched = true;
   }
 
+  // A fresh regime switch is a fresh episode - clear the "already traded
+  // this read" gate so a new setup can trade once. Without this, the
+  // very first regime this symbol ever enters would be permanently
+  // capped at zero trades.
+  if (switched) {
+    state.tradedThisEpisode = false;
+  }
+
   await store.setJSON(`regime_state_${symbol}`, state);
-  return { regime: state.regime, switched };
+  return { regime: state.regime, switched, tradedThisEpisode: state.tradedThisEpisode || false };
+}
+
+// Marks the current regime episode for this symbol as already traded -
+// caps correlated re-entry (the same continuing TREND/RANGE read betting
+// again every ~60s run) to one trade per episode, until the regime
+// actually changes. Called right after a trade is confirmed placed.
+async function markTradedThisEpisode(symbol) {
+  const store = getMemoryStore();
+  const state = await getRegimeState(symbol);
+  state.tradedThisEpisode = true;
+  await store.setJSON(`regime_state_${symbol}`, state);
 }
 
 // ---- Weekly profit tracking (separate from daily state) ----
@@ -648,6 +667,7 @@ module.exports = {
   computeStats,
   getRegimeState,
   updateRegimeForSymbol,
+  markTradedThisEpisode,
   getWeekStartUTC,
   loadWeeklyState,
   saveWeeklyState,

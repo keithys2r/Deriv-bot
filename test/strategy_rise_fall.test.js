@@ -57,6 +57,8 @@ module.exports = {
       rsiPeriod: 14
     });
     assert.strictEqual(result.signal, 'CALL', `rising closes with fast EMA above slow EMA should signal CALL, got: ${result.reason}`);
+    // confidence = (adx - adxFloorTrend) / (100 - adxFloorTrend) = (90-25)/(100-25)
+    assert.ok(Math.abs(result.details.confidence - 0.8667) < 0.001, `expected confidence ~0.867, got ${result.details.confidence}`);
   },
 
   'adaptive TREND regime refuses to trade when ADX is below the floor'(assert) {
@@ -96,5 +98,48 @@ module.exports = {
       rsiOversold: 30
     });
     assert.strictEqual(result.signal, 'CALL', `sharp drop should read as oversold -> CALL, got: ${result.reason}`);
+  },
+
+  'confidence is comparable across regimes, not tied to raw ADX magnitude'(assert) {
+    // A deeply oversold RANGE read (RSI near 0) should score a HIGH
+    // confidence despite RANGE being "low ADX" by definition, while a
+    // TREND read that only just clears its ADX floor should score a LOW
+    // confidence despite "trend" sounding more decisive. This is the
+    // actual bug being fixed: driver.js's watchlist scanner used to sort
+    // candidates by raw ADX, which mathematically always favors TREND
+    // (defined as high ADX) over RANGE (defined as low ADX) - confidence
+    // puts them on the same 0-1 footing instead.
+    const flatCloses = new Array(30).fill(100);
+    const crashCloses = [];
+    for (let i = 1; i <= 8; i++) crashCloses.push(100 - i * 5); // deep, fast drop
+    const rangeResult = strategy.getSignal(flatCloses.concat(crashCloses), {
+      useAdaptiveRegime: true,
+      regime: 'range',
+      adx: 15,
+      biasEnabled: false,
+      emaFastPeriod: 9,
+      emaSlowPeriod: 21,
+      rsiPeriod: 14,
+      rsiOverbought: 70,
+      rsiOversold: 30
+    });
+
+    const trending = makeTrendingCandles(60, 100, 0.5);
+    const barelyTrendResult = strategy.getSignal(trending.map((c) => c.close), {
+      useAdaptiveRegime: true,
+      regime: 'trend',
+      adx: 26, // barely above the floor
+      adxFloorTrend: 25,
+      emaFastPeriod: 9,
+      emaSlowPeriod: 21,
+      rsiPeriod: 14
+    });
+
+    assert.strictEqual(rangeResult.signal, 'CALL');
+    assert.strictEqual(barelyTrendResult.signal, 'CALL');
+    assert.ok(
+      rangeResult.details.confidence > barelyTrendResult.details.confidence,
+      `expected the deep oversold RANGE read (${rangeResult.details.confidence}) to outrank the barely-qualifying TREND read (${barelyTrendResult.details.confidence})`
+    );
   }
 };
