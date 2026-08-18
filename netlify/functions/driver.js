@@ -148,16 +148,21 @@ async function runRiseFallStrategy(token, app_id, settings) {
       })))
     );
 
-    const summary = scanResults.map((r) => `${r.symbol}: ${r.signal ? r.signal : 'no signal'}${r.adx !== null && r.adx !== undefined ? ` (ADX ${r.adx.toFixed(1)})` : ''}`).join(' | ');
+    const summary = scanResults.map((r) => `${r.symbol}: ${r.signal ? r.signal : 'no signal'}${r.adx !== null && r.adx !== undefined ? ` (ADX ${r.adx.toFixed(1)})` : ''}${r.confidence !== undefined ? ` [conf ${r.confidence.toFixed(2)}]` : ''}`).join(' | ');
     console.log('Watchlist scan:', summary);
     await memory.appendLog(STRATEGY_NAME, `Scan: ${summary}`, 'info');
 
     // Pick the strongest candidate among symbols that actually have a
-    // signal - ranked by ADX (higher = more confident regime read).
-    // Falls back to watchlist order if ADX isn't available (classic mode).
+    // signal - ranked by `confidence` (0-1, comparable across regimes),
+    // NOT raw ADX. Raw ADX would always favor a TREND-regime candidate
+    // over a RANGE-regime one, since TREND is *defined* as high ADX and
+    // RANGE as low ADX - that was a real bug (see strategy_rise_fall.js's
+    // confidence calculation for how each regime's read is scaled onto
+    // the same footing). Falls back to watchlist order if confidence
+    // isn't available (classic mode, which has no adaptive regime at all).
     const candidates = scanResults.filter((r) => r.signal);
     if (candidates.length > 0) {
-      candidates.sort((a, b) => (b.adx || 0) - (a.adx || 0));
+      candidates.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
       const chosen = candidates[0];
       symbol = chosen.symbol;
       signalResult = { signal: chosen.signal, reason: chosen.reason, details: chosen.details };
@@ -224,6 +229,10 @@ async function runRiseFallStrategy(token, app_id, settings) {
       contractId,
       placedAt: new Date().toISOString()
     }).catch((e) => console.log('Failed to persist contract ID:', e.message));
+
+    // Caps correlated re-entry (see computeRiseFallSignal's tradedThisEpisode
+    // check) - only marked once the buy is confirmed real, not on a mere attempt.
+    memory.markTradedThisEpisode(symbol).catch((e) => console.log('Failed to mark traded-this-episode:', e.message));
   });
 
   if (tradeResult.error) {
@@ -350,6 +359,24 @@ async function computeRiseFallSignal(symbol, candles, settings) {
     if (regimeResult.switched) {
       await memory.appendLog('rise_fall', `[${symbol}] Regime switched to ${regime.toUpperCase()} (ADX ${adx !== null ? adx.toFixed(1) : '—'})`, 'pause');
     }
+
+    // Cap correlated re-entry: this same regime read already produced a
+    // trade on this symbol, and the regime hasn't changed since - refuse
+    // to bet the identical read again every ~60s run (this is what
+    // turned one questionable trend call into dozens of correlated
+    // trades clustered in the same hour). Waits for either a genuine
+    // regime switch (see updateRegimeForSymbol) or a fresh episode.
+    if (regimeResult.tradedThisEpisode) {
+      return {
+        symbol,
+        signal: null,
+        reason: `[${symbol}] Already traded this ${regime.toUpperCase()} episode - waiting for a fresh regime switch`,
+        details: { regime, adx },
+        regime,
+        adx,
+        confidence: undefined
+      };
+    }
   }
 
   const signalResult = riseFallStrategy.getSignal(closes, {
@@ -369,7 +396,7 @@ async function computeRiseFallSignal(symbol, candles, settings) {
     biasThresholdPct: settings.biasThresholdPct
   });
 
-  return { symbol, signal: signalResult.signal, reason: signalResult.reason, details: signalResult.details, regime, adx };
+  return { symbol, signal: signalResult.signal, reason: signalResult.reason, details: signalResult.details, regime, adx, confidence: signalResult.details ? signalResult.details.confidence : undefined };
 }
 
 // ---- ACCUMULATOR branch ----

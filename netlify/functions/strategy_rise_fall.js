@@ -109,6 +109,10 @@ function calculateADX(candles, period) {
   return parseFloat((Math.abs(pdi - mdi) / sum * 100).toFixed(1));
 }
 
+function clamp01(n) {
+  return Math.max(0, Math.min(1, n));
+}
+
 // Simple price-direction bias over a lookback window - used to block
 // range-mode mean-reversion trades against a strong recent push.
 function calculateBias(closes, period, thresholdPct) {
@@ -207,6 +211,13 @@ function getSignal(closes, params) {
     // Continuous direction signal - no fresh-cross requirement, fires
     // as long as fast EMA is on this side of slow EMA.
     const direction = fastNow > slowNow ? 'CALL' : 'PUT';
+    // How far above the "trust this trend" floor, scaled 0-1 - NOT
+    // directly comparable to a raw ADX number across regimes, since
+    // TREND is defined as high ADX and RANGE as low ADX by construction.
+    // A watchlist scanner picking "highest confidence" instead of
+    // "highest ADX" needs a scale that means the same thing in both
+    // regimes - see the RANGE branch below for its own version of this.
+    details.confidence = (adx !== null && adx !== undefined) ? clamp01((adx - adxFloorTrend) / (100 - adxFloorTrend)) : 0;
     return {
       signal: direction,
       reason: `TREND regime: EMA${emaFastPeriod} ${direction === 'CALL' ? 'above' : 'below'} EMA${emaSlowPeriod} (ADX ${adx !== null && adx !== undefined ? adx.toFixed(1) : '—'})`,
@@ -257,6 +268,15 @@ function getSignal(closes, params) {
         }
       }
     }
+
+    // How far RSI has pushed past the oversold/overbought threshold,
+    // scaled 0-1 - the RANGE-side equivalent of the TREND branch's ADX
+    // scaling above, so the two are comparable on the same footing
+    // instead of a watchlist scan always favoring whichever candidate
+    // happens to be in TREND (see driver.js's candidate sort).
+    details.confidence = sig === 'CALL'
+      ? clamp01((rsiOversold - rsiNow) / rsiOversold)
+      : clamp01((rsiNow - rsiOverbought) / (100 - rsiOverbought));
 
     return {
       signal: sig,
