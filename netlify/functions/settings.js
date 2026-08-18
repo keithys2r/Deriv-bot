@@ -9,6 +9,27 @@ const memory = require('./memory');
 const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ25V', '1HZ50V', '1HZ75V', '1HZ100V'];
 const ACCUMULATOR_GROWTH_RATES = [0.01, 0.02, 0.03, 0.04, 0.05]; // Deriv's allowed discrete growth rates
 
+// Shared with telegram-webhook.js, so a stake change via Telegram is
+// held to exactly the same 20%-of-stop-loss rule as one made from the
+// dashboard, instead of two copies of this rule silently drifting apart.
+function validateStakeAmount(rawStake, dailyStopLoss) {
+  const stake = parseFloat(rawStake);
+  if (!Number.isFinite(stake) || stake <= 0) {
+    return { ok: false, error: 'Stake must be greater than 0' };
+  }
+  const maxStake = dailyStopLoss * 0.2;
+  if (stake > maxStake) {
+    return {
+      ok: false,
+      error: `Stake of $${stake.toFixed(2)} rejected - with a $${dailyStopLoss} daily stop loss, a single trade shouldn't risk more than $${maxStake.toFixed(2)} (20% of that).`
+    };
+  }
+  return { ok: true, value: stake };
+}
+
+module.exports.validateStakeAmount = validateStakeAmount;
+module.exports.ALLOWED_SYMBOLS = ALLOWED_SYMBOLS;
+
 exports.handler = async function (event) {
   if (event.httpMethod === 'OPTIONS') {
     return {
@@ -69,19 +90,13 @@ exports.handler = async function (event) {
       // than 20% of whatever the daily stop loss ends up being (using the
       // NEW value if the user is changing it in this same request).
       const effectiveStopLoss = update.dailyStopLoss || current.dailyStopLoss;
-      const maxStake = effectiveStopLoss * 0.2;
 
       if (body.stakeAmount) {
-        const stake = parseFloat(body.stakeAmount);
-        if (stake <= 0) {
-          return respond({ error: 'Stake must be greater than 0' });
+        const validated = validateStakeAmount(body.stakeAmount, effectiveStopLoss);
+        if (!validated.ok) {
+          return respond({ error: validated.error });
         }
-        if (stake > maxStake) {
-          return respond({
-            error: `Stake of $${stake.toFixed(2)} rejected - with a $${effectiveStopLoss} daily stop loss, a single trade shouldn't risk more than $${maxStake.toFixed(2)} (20% of that).`
-          });
-        }
-        update.stakeAmount = stake;
+        update.stakeAmount = validated.value;
       }
 
       if (body.emaFastPeriod && body.emaFastPeriod > 0) update.emaFastPeriod = parseInt(body.emaFastPeriod);
