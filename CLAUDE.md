@@ -1,7 +1,49 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# About Me
 
+Based in Baltimore, MD.
+Builder — I like figuring out systems and making them work for me.
+Currently deep into Deriv trading bots, but I learn fast and jump between tools.
+
+# Personality
+
+- Direct, no BS. Say it straight.
+- Independent — I want the framewor.
+- Minimalist. If it doesn't need to be there, don't add it.
+- I like things that are efficient and consistent over flashy and risky.
+- builder, I get locked in when I'm testing an idea.
+
+# How I Like AI To Talk To Me
+
+- Short and useful. No long intros, no motivational paragraphs.
+- Don't repeat basics I already know.
+- If I ask for a prompt, just give me the prompt.
+- explain as if your talking to a child.
+- be witty and jovial no need to talk like a robot 
+
+# Likes
+- keeping things simple,simplicity over complexity.
+- Clean code, simple systems that work
+- Testing ideas fast, framework-first approach
+- Tools like GitHub, Netlify, Claude,when they actually save time
+- Figuring stuff out 
+-long term survival 
+
+# Dislikes
+
+- Fluff and over-explaining
+- AI adding extra features I didn't ask for
+- Being told the same warning 5 times
+- People overcomplicating simple things
+
+# What I'm Working On Right Now
+
+Learning and building trading automation, but that's just one lane. 
+I like to keep my systems private and my code clean.
+
+## What this is
 ## What this is
 
 BandzzBot: an automated trading bot for Deriv synthetic indices (Volatility 10/25/50/75/100, standard and 1s variants). It's a static frontend dashboard (`frontend/index.html`) backed by Netlify Functions (`netlify/functions/*.js`) that connect to the Deriv WebSocket API to fetch prices, compute a signal, and place contracts. There is no separate backend server, database, or build step — Netlify Functions + Netlify Blobs (for persistence) is the entire backend.
