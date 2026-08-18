@@ -600,13 +600,13 @@
     <p class="settings-section-label">Active strategy</p>
     <div class="strategy-toggle">
       <button type="button" class="strategy-btn" id="riseFallBtn" data-strategy="rise_fall">Rise/Fall</button>
-      <button type="button" class="strategy-btn" id="digitBtn" data-strategy="digit">Digit Differ</button>
+      <button type="button" class="strategy-btn" id="accumulatorBtn" data-strategy="accumulator">Accumulator</button>
     </div>
 
-    <div id="riseFallSymbolSection">
+    <div id="autoSelectSection">
       <div class="checkbox-row">
         <input type="checkbox" id="autoSelectInput">
-        <label for="autoSelectInput">Auto-select best symbol - scans 3 watchlist symbols each run, trades whichever has the strongest signal (Rise/Fall only)</label>
+        <label for="autoSelectInput" id="autoSelectLabel">Auto-select best symbol - scans 3 watchlist symbols each run, trades whichever has the strongest signal</label>
       </div>
     </div>
 
@@ -703,14 +703,33 @@
       </div>
     </div>
 
-    <div id="digitSettings" style="display:none;">
-      <p class="settings-section-label">Digit settings</p>
+    <div id="accumulatorSettings" style="display:none;">
+      <p class="settings-section-label">Accumulator settings</p>
       <div class="settings-grid">
         <div>
-          <label>Lookback ticks</label>
-          <input type="number" id="digitLookbackInput" min="10" max="100" value="20">
+          <label>Growth rate (%)</label>
+          <select id="accumulatorGrowthRateInput">
+            <option value="0.01">1% (safest)</option>
+            <option value="0.02">2%</option>
+            <option value="0.03">3%</option>
+            <option value="0.04">4%</option>
+            <option value="0.05">5% (fastest)</option>
+          </select>
+        </div>
+        <div>
+          <label>Take-profit (% of stake)</label>
+          <input type="number" id="accumulatorTakeProfitInput" min="1" max="100" step="1" value="5">
+        </div>
+        <div>
+          <label>Max ADX to enter</label>
+          <input type="number" id="accumulatorAdxMaxInput" min="5" max="50" value="20">
+        </div>
+        <div>
+          <label>Max hold (minutes)</label>
+          <input type="number" id="accumulatorMaxHoldInput" min="1" max="60" value="10">
         </div>
       </div>
+      <p class="settings-note" style="text-align:left;margin-top:6px;">Survival-focused: only enters when ADX reads calm/ranging (lower = safer), cashes out automatically once take-profit is hit, and force-sells as a backstop if a trade runs past the max hold time.</p>
     </div>
 
     <p class="settings-section-label">Risk management</p>
@@ -896,7 +915,7 @@
     var statusText = document.getElementById('statusText');
 
     if (data.activeStrategy) selectedStrategy = data.activeStrategy;
-    var strategyLabel = data.activeStrategy === 'digit' ? 'DIGIT DIFFER' : 'RISE/FALL';
+    var strategyLabel = data.activeStrategy === 'accumulator' ? 'ACCUMULATOR' : 'RISE/FALL';
     document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 DEMO';
 
     var weeklyNote = document.getElementById('weeklyProgressNote');
@@ -1053,7 +1072,10 @@
     document.getElementById('biasThresholdInput').value = settings.biasThresholdPct || 0.05;
     document.getElementById('adaptiveRegimeFields').style.display = (settings.useAdaptiveRegime !== false) ? 'block' : 'none';
     document.getElementById('classicModeFields').style.display = (settings.useAdaptiveRegime !== false) ? 'none' : 'block';
-    document.getElementById('digitLookbackInput').value = settings.digitLookback || 20;
+    document.getElementById('accumulatorGrowthRateInput').value = settings.accumulatorGrowthRate || 0.01;
+    document.getElementById('accumulatorTakeProfitInput').value = Math.round((settings.accumulatorTakeProfitPct || 0.05) * 100);
+    document.getElementById('accumulatorAdxMaxInput').value = settings.accumulatorAdxMaxEntry || 20;
+    document.getElementById('accumulatorMaxHoldInput').value = settings.accumulatorMaxHoldMinutes || 10;
     document.getElementById('profitGoalInput').value = settings.dailyProfitGoal;
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
     document.getElementById('maxLossesInput').value = settings.maxConsecutiveLosses;
@@ -1063,8 +1085,8 @@
     document.getElementById('autoSelectInput').checked = settings.autoSelectSymbol === true;
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
-    var strategyLabel = selectedStrategy === 'digit' ? 'DIGIT DIFFER' : 'RISE/FALL';
-    if (settings.autoSelectSymbol && selectedStrategy === 'rise_fall') {
+    var strategyLabel = selectedStrategy === 'accumulator' ? 'ACCUMULATOR' : 'RISE/FALL';
+    if (settings.autoSelectSymbol) {
       document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 AUTO-SCAN \u00B7 DEMO';
     } else {
       document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
@@ -1113,15 +1135,20 @@
 
   function updateStrategyToggleUI() {
     document.getElementById('riseFallBtn').className = 'strategy-btn' + (selectedStrategy === 'rise_fall' ? ' selected' : '');
-    document.getElementById('digitBtn').className = 'strategy-btn' + (selectedStrategy === 'digit' ? ' selected' : '');
+    document.getElementById('accumulatorBtn').className = 'strategy-btn' + (selectedStrategy === 'accumulator' ? ' selected' : '');
     document.getElementById('riseFallSettings').style.display = selectedStrategy === 'rise_fall' ? 'block' : 'none';
-    document.getElementById('digitSettings').style.display = selectedStrategy === 'digit' ? 'block' : 'none';
-    document.getElementById('riseFallSymbolSection').style.display = selectedStrategy === 'rise_fall' ? 'block' : 'none';
+    document.getElementById('accumulatorSettings').style.display = selectedStrategy === 'accumulator' ? 'block' : 'none';
+    // Auto-select-symbol works for both strategies - only the ranking
+    // rule differs (rise_fall wants the strongest trend signal,
+    // accumulator wants the calmest/lowest-volatility symbol).
+    document.getElementById('autoSelectLabel').textContent = selectedStrategy === 'accumulator'
+      ? 'Auto-select calmest symbol - scans 3 watchlist symbols each run, trades whichever has the lowest volatility'
+      : 'Auto-select best symbol - scans 3 watchlist symbols each run, trades whichever has the strongest signal';
     updateSymbolSectionVisibility();
   }
 
   function updateSymbolSectionVisibility() {
-    var autoOn = selectedStrategy === 'rise_fall' && document.getElementById('autoSelectInput').checked;
+    var autoOn = document.getElementById('autoSelectInput').checked;
     document.getElementById('manualSymbolSection').style.display = autoOn ? 'none' : 'block';
     document.getElementById('watchlistSection').style.display = autoOn ? 'block' : 'none';
   }
@@ -1132,8 +1159,8 @@
     selectedStrategy = 'rise_fall';
     updateStrategyToggleUI();
   });
-  document.getElementById('digitBtn').addEventListener('click', function() {
-    selectedStrategy = 'digit';
+  document.getElementById('accumulatorBtn').addEventListener('click', function() {
+    selectedStrategy = 'accumulator';
     updateStrategyToggleUI();
   });
 
@@ -1190,21 +1217,32 @@
           return;
         }
 
-        document.getElementById('perfTotalLine').textContent =
-          'All-time: ' + data.totalTrades + ' trades \u00B7 ' + Math.round(data.totalWinRate) + '% win rate \u00B7 ' +
+        var totalLine = 'All-time: ' + data.totalTrades + ' trades \u00B7 ' + Math.round(data.totalWinRate) + '% win rate \u00B7 ' +
           (data.totalProfit >= 0 ? '+' : '-') + '$' + Math.abs(data.totalProfit).toFixed(2);
+        if (data.strategy === 'accumulator' && data.avgHoldSeconds) {
+          totalLine += ' \u00B7 avg hold ' + Math.round(data.avgHoldSeconds) + 's';
+        }
+        document.getElementById('perfTotalLine').textContent = totalLine;
 
         renderPerfList('perfByHour', data.byHour, function(h) {
           return h + ':00-' + h + ':59 UTC';
         });
 
         var regimeLabel = document.getElementById('perfRegimeLabel');
-        if (data.strategy === 'digit') {
-          regimeLabel.style.display = 'none';
-          document.getElementById('perfByRegime').style.display = 'none';
+        regimeLabel.style.display = 'block';
+        document.getElementById('perfByRegime').style.display = 'flex';
+        if (data.strategy === 'accumulator') {
+          // Reuses the same "by regime" list/label for the accumulator's
+          // survival-focused breakdown instead - how each trade actually
+          // ended (hit take-profit, got knocked out, or force-sold by
+          // the safety timer), which is the metric that matters here.
+          regimeLabel.textContent = 'By exit reason';
+          var exitReasonLabels = { take_profit: 'Take Profit', knockout: 'Knockout', timeout: 'Timeout (safety sell)' };
+          renderPerfList('perfByRegime', data.byExitReason || {}, function(r) {
+            return exitReasonLabels[r] || r.toUpperCase();
+          });
         } else {
-          regimeLabel.style.display = 'block';
-          document.getElementById('perfByRegime').style.display = 'flex';
+          regimeLabel.textContent = 'By regime';
           renderPerfList('perfByRegime', data.byRegime, function(r) {
             return r.toUpperCase();
           });
@@ -1249,7 +1287,10 @@
       biasEnabled: document.getElementById('biasEnabledInput').checked,
       biasPeriod: parseInt(document.getElementById('biasPeriodInput').value),
       biasThresholdPct: parseFloat(document.getElementById('biasThresholdInput').value),
-      digitLookback: parseInt(document.getElementById('digitLookbackInput').value),
+      accumulatorGrowthRate: parseFloat(document.getElementById('accumulatorGrowthRateInput').value),
+      accumulatorTakeProfitPct: parseInt(document.getElementById('accumulatorTakeProfitInput').value) / 100,
+      accumulatorAdxMaxEntry: parseInt(document.getElementById('accumulatorAdxMaxInput').value),
+      accumulatorMaxHoldMinutes: parseInt(document.getElementById('accumulatorMaxHoldInput').value),
       dailyProfitGoal: parseFloat(document.getElementById('profitGoalInput').value),
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
       maxConsecutiveLosses: parseInt(document.getElementById('maxLossesInput').value),

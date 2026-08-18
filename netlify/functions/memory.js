@@ -1,7 +1,7 @@
 // memory.js
 // Handles saving/loading bot state (P&L, win rate, losses, pause state)
 // Uses Netlify Blobs so data survives function restarts.
-// Each strategy gets its own memory "slot" so Digit and Rise/Fall don't mix.
+// Each strategy gets its own memory "slot" so Accumulator and Rise/Fall don't mix.
 
 const { getStore } = require('@netlify/blobs');
 
@@ -43,7 +43,7 @@ function defaultState() {
   };
 }
 
-// Load state for a given strategy ("digit_over_under" or "rise_fall")
+// Load state for a given strategy ("accumulator" or "rise_fall")
 // If nothing saved yet, or it's a new day, returns a fresh default state.
 async function loadState(strategyName) {
   const store = getMemoryStore();
@@ -158,7 +158,7 @@ const SETTINGS_KEY = 'bot_settings';
 
 function defaultSettings() {
   return {
-    activeStrategy: 'rise_fall', // 'rise_fall' | 'digit' - the switch
+    activeStrategy: 'rise_fall', // 'rise_fall' | 'accumulator' - the switch
     symbol: 'R_100',
     autoSelectSymbol: false,
     watchlist: ['R_100', 'R_75', 'R_50'],
@@ -179,7 +179,10 @@ function defaultSettings() {
     biasEnabled: true,
     biasPeriod: 20,
     biasThresholdPct: 0.05,
-    digitLookback: 20,
+    accumulatorGrowthRate: 0.01,   // 1% - the safest/lowest of Deriv's allowed growth rates, wider knockout barrier
+    accumulatorTakeProfitPct: 0.05, // cash out once profit reaches 5% of stake
+    accumulatorAdxMaxEntry: 20,    // only enter when ADX is at/below this (calm/ranging market)
+    accumulatorMaxHoldMinutes: 10, // safety backstop: force-sell if still open this long
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
     weeklyProfitGoal: 100,
@@ -340,7 +343,9 @@ async function recordTradeHistory(strategyName, record) {
     direction: record.direction,
     stake: record.stake,
     won: record.won,
-    profit: record.profit
+    profit: record.profit,
+    exitReason: record.exitReason || null, // accumulator only: 'take_profit' | 'knockout' | 'timeout'
+    holdSeconds: record.holdSeconds !== undefined ? record.holdSeconds : null // accumulator only
   });
 
   if (history.length > TRADE_HISTORY_MAX) {
@@ -369,10 +374,13 @@ async function computeStats(strategyName) {
   const byHour = {}; // hour (0-23) -> { wins, losses, profit }
   const byRegime = {}; // 'trend' | 'range' -> { wins, losses, profit }
   const bySymbol = {}; // symbol -> { wins, losses, profit }
+  const byExitReason = {}; // accumulator only: 'take_profit' | 'knockout' | 'timeout' -> { wins, losses, profit }
 
   let totalWins = 0;
   let totalLosses = 0;
   let totalProfit = 0;
+  let holdSecondsSum = 0;
+  let holdSecondsCount = 0;
 
   history.forEach((t) => {
     const hourKey = t.hour;
@@ -384,6 +392,18 @@ async function computeStats(strategyName) {
     if (!bySymbol[symbolKey]) bySymbol[symbolKey] = { wins: 0, losses: 0, profit: 0 };
 
     const p = Number.isFinite(t.profit) ? t.profit : 0;
+
+    if (t.exitReason) {
+      if (!byExitReason[t.exitReason]) byExitReason[t.exitReason] = { wins: 0, losses: 0, profit: 0 };
+      if (t.won) byExitReason[t.exitReason].wins++;
+      else byExitReason[t.exitReason].losses++;
+      byExitReason[t.exitReason].profit += p;
+    }
+
+    if (Number.isFinite(t.holdSeconds)) {
+      holdSecondsSum += t.holdSeconds;
+      holdSecondsCount++;
+    }
 
     if (t.won) {
       byHour[hourKey].wins++;
@@ -424,9 +444,11 @@ async function computeStats(strategyName) {
     totalLosses,
     totalWinRate: (totalWins + totalLosses) > 0 ? (totalWins / (totalWins + totalLosses)) * 100 : 0,
     totalProfit,
+    avgHoldSeconds: holdSecondsCount > 0 ? holdSecondsSum / holdSecondsCount : null,
     byHour: withWinRate(byHour),
     byRegime: withWinRate(byRegime),
-    bySymbol: withWinRate(bySymbol)
+    bySymbol: withWinRate(bySymbol),
+    byExitReason: withWinRate(byExitReason)
   };
 }
 

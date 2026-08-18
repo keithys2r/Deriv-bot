@@ -7,6 +7,7 @@
 const memory = require('./memory');
 
 const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ25V', '1HZ50V', '1HZ75V', '1HZ100V'];
+const ACCUMULATOR_GROWTH_RATES = [0.01, 0.02, 0.03, 0.04, 0.05]; // Deriv's allowed discrete growth rates
 
 exports.handler = async function (event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -41,11 +42,8 @@ exports.handler = async function (event) {
           return respond({ error: `Watchlist needs exactly 3 valid symbols, got ${validWatchlist.length}.` });
         }
       }
-      if (body.activeStrategy === 'rise_fall' || body.activeStrategy === 'digit') {
+      if (body.activeStrategy === 'rise_fall' || body.activeStrategy === 'accumulator') {
         update.activeStrategy = body.activeStrategy;
-      }
-      if (body.digitLookback && body.digitLookback >= 10 && body.digitLookback <= 100) {
-        update.digitLookback = parseInt(body.digitLookback);
       }
 
       // Risk rules - validate ranges before anything else, since stake
@@ -104,6 +102,19 @@ exports.handler = async function (event) {
       if (typeof body.biasEnabled === 'boolean') update.biasEnabled = body.biasEnabled;
       if (body.biasPeriod && body.biasPeriod >= 5 && body.biasPeriod <= 100) update.biasPeriod = parseInt(body.biasPeriod);
       if (body.biasThresholdPct !== undefined && body.biasThresholdPct >= 0.01 && body.biasThresholdPct <= 5) update.biasThresholdPct = parseFloat(body.biasThresholdPct);
+
+      if (body.accumulatorGrowthRate !== undefined && ACCUMULATOR_GROWTH_RATES.includes(body.accumulatorGrowthRate)) {
+        update.accumulatorGrowthRate = body.accumulatorGrowthRate;
+      }
+      if (body.accumulatorTakeProfitPct !== undefined && body.accumulatorTakeProfitPct >= 0.01 && body.accumulatorTakeProfitPct <= 1.0) {
+        update.accumulatorTakeProfitPct = parseFloat(body.accumulatorTakeProfitPct);
+      }
+      if (body.accumulatorAdxMaxEntry !== undefined && body.accumulatorAdxMaxEntry >= 5 && body.accumulatorAdxMaxEntry <= 50) {
+        update.accumulatorAdxMaxEntry = parseInt(body.accumulatorAdxMaxEntry);
+      }
+      if (body.accumulatorMaxHoldMinutes !== undefined && body.accumulatorMaxHoldMinutes >= 1 && body.accumulatorMaxHoldMinutes <= 60) {
+        update.accumulatorMaxHoldMinutes = parseInt(body.accumulatorMaxHoldMinutes);
+      }
 
       const saved = await memory.saveSettings(update);
       await memory.appendLog(saved.activeStrategy, `Settings updated: ${Object.keys(update).join(', ')}`, 'info');
