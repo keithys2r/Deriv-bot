@@ -408,7 +408,7 @@
 
   .strategy-toggle {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 8px;
     margin-bottom: 4px;
   }
@@ -635,6 +635,7 @@
     <div class="strategy-toggle">
       <button type="button" class="strategy-btn" id="riseFallBtn" data-strategy="rise_fall">Rise/Fall</button>
       <button type="button" class="strategy-btn" id="accumulatorBtn" data-strategy="accumulator">Accumulator</button>
+      <button type="button" class="strategy-btn" id="evenOddBtn" data-strategy="even_odd">Even/Odd</button>
     </div>
 
     <div id="autoSelectSection">
@@ -764,6 +765,21 @@
         </div>
       </div>
       <p class="settings-note" style="text-align:left;margin-top:6px;">Survival-focused: only enters when ADX reads calm/ranging (lower = safer), cashes out automatically once take-profit is hit, and force-sells as a backstop if a trade runs past the max hold time.</p>
+    </div>
+
+    <div id="evenOddSettings" style="display:none;">
+      <p class="settings-section-label">Even/Odd settings</p>
+      <div class="settings-grid">
+        <div>
+          <label>Lookback ticks</label>
+          <input type="number" id="evenOddLookbackInput" min="5" max="100" value="20">
+        </div>
+        <div>
+          <label>Duration (ticks)</label>
+          <input type="number" id="evenOddDurationInput" min="1" max="10" value="1">
+        </div>
+      </div>
+      <p class="settings-note" style="text-align:left;margin-top:6px;">Honest note: a synthetic index's last digit is close to uniformly even/odd, so this is close to a coin flip - bets against whichever parity has been more frequent over the lookback window, purely a heuristic rather than a real statistical edge.</p>
     </div>
 
     <p class="settings-section-label">Risk management</p>
@@ -958,7 +974,7 @@
     var statusText = document.getElementById('statusText');
 
     if (data.activeStrategy) selectedStrategy = data.activeStrategy;
-    var strategyLabel = data.activeStrategy === 'accumulator' ? 'ACCUMULATOR' : 'RISE/FALL';
+    var strategyLabel = STRATEGY_LABELS[data.activeStrategy] || 'RISE/FALL';
     document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 DEMO';
 
     var weeklyNote = document.getElementById('weeklyProgressNote');
@@ -1128,6 +1144,12 @@
     '1HZ75V': 'Vol 75 (1s)', '1HZ100V': 'Vol 100 (1s)'
   };
 
+  var STRATEGY_LABELS = {
+    rise_fall: 'RISE/FALL',
+    accumulator: 'ACCUMULATOR',
+    even_odd: 'EVEN/ODD'
+  };
+
   function loadSettings() {
     fetch(SETTINGS_URL)
       .then(function(r) { return r.json(); })
@@ -1163,6 +1185,8 @@
     document.getElementById('accumulatorTakeProfitInput').value = Math.round((settings.accumulatorTakeProfitPct || 0.05) * 100);
     document.getElementById('accumulatorAdxMaxInput').value = settings.accumulatorAdxMaxEntry || 20;
     document.getElementById('accumulatorMaxHoldInput').value = settings.accumulatorMaxHoldMinutes || 10;
+    document.getElementById('evenOddLookbackInput').value = settings.evenOddLookback || 20;
+    document.getElementById('evenOddDurationInput').value = settings.evenOddDurationTicks || 1;
     document.getElementById('profitGoalInput').value = settings.dailyProfitGoal;
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
     document.getElementById('maxLossesInput').value = settings.maxConsecutiveLosses;
@@ -1172,8 +1196,8 @@
     document.getElementById('autoSelectInput').checked = settings.autoSelectSymbol === true;
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
-    var strategyLabel = selectedStrategy === 'accumulator' ? 'ACCUMULATOR' : 'RISE/FALL';
-    if (settings.autoSelectSymbol) {
+    var strategyLabel = STRATEGY_LABELS[selectedStrategy] || 'RISE/FALL';
+    if (settings.autoSelectSymbol && selectedStrategy !== 'even_odd') {
       document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 AUTO-SCAN \u00B7 DEMO';
     } else {
       document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
@@ -1223,11 +1247,14 @@
   function updateStrategyToggleUI() {
     document.getElementById('riseFallBtn').className = 'strategy-btn' + (selectedStrategy === 'rise_fall' ? ' selected' : '');
     document.getElementById('accumulatorBtn').className = 'strategy-btn' + (selectedStrategy === 'accumulator' ? ' selected' : '');
+    document.getElementById('evenOddBtn').className = 'strategy-btn' + (selectedStrategy === 'even_odd' ? ' selected' : '');
     document.getElementById('riseFallSettings').style.display = selectedStrategy === 'rise_fall' ? 'block' : 'none';
     document.getElementById('accumulatorSettings').style.display = selectedStrategy === 'accumulator' ? 'block' : 'none';
-    // Auto-select-symbol works for both strategies - only the ranking
-    // rule differs (rise_fall wants the strongest trend signal,
-    // accumulator wants the calmest/lowest-volatility symbol).
+    document.getElementById('evenOddSettings').style.display = selectedStrategy === 'even_odd' ? 'block' : 'none';
+    // Auto-select-symbol only exists for rise_fall/accumulator - even_odd
+    // has no watchlist-scan support in driver.js, so hide it entirely
+    // rather than show a toggle that would silently do nothing.
+    document.getElementById('autoSelectSection').style.display = selectedStrategy === 'even_odd' ? 'none' : 'block';
     document.getElementById('autoSelectLabel').textContent = selectedStrategy === 'accumulator'
       ? 'Auto-select calmest symbol - scans 3 watchlist symbols each run, trades whichever has the lowest volatility'
       : 'Auto-select best symbol - scans 3 watchlist symbols each run, trades whichever has the strongest signal';
@@ -1235,7 +1262,7 @@
   }
 
   function updateSymbolSectionVisibility() {
-    var autoOn = document.getElementById('autoSelectInput').checked;
+    var autoOn = selectedStrategy !== 'even_odd' && document.getElementById('autoSelectInput').checked;
     document.getElementById('manualSymbolSection').style.display = autoOn ? 'none' : 'block';
     document.getElementById('watchlistSection').style.display = autoOn ? 'block' : 'none';
   }
@@ -1248,6 +1275,10 @@
   });
   document.getElementById('accumulatorBtn').addEventListener('click', function() {
     selectedStrategy = 'accumulator';
+    updateStrategyToggleUI();
+  });
+  document.getElementById('evenOddBtn').addEventListener('click', function() {
+    selectedStrategy = 'even_odd';
     updateStrategyToggleUI();
   });
 
@@ -1316,23 +1347,30 @@
         });
 
         var regimeLabel = document.getElementById('perfRegimeLabel');
-        regimeLabel.style.display = 'block';
-        document.getElementById('perfByRegime').style.display = 'flex';
-        if (data.strategy === 'accumulator') {
-          // Reuses the same "by regime" list/label for the accumulator's
-          // survival-focused breakdown instead - how each trade actually
-          // ended (hit take-profit, got knocked out, or force-sold by
-          // the safety timer), which is the metric that matters here.
-          regimeLabel.textContent = 'By exit reason';
-          var exitReasonLabels = { take_profit: 'Take Profit', knockout: 'Knockout', timeout: 'Timeout (safety sell)' };
-          renderPerfList('perfByRegime', data.byExitReason || {}, function(r) {
-            return exitReasonLabels[r] || r.toUpperCase();
-          });
+        if (data.strategy === 'even_odd') {
+          // No regime or exit-reason concept for a single-shot digit
+          // parity bet - nothing meaningful to show in this section.
+          regimeLabel.style.display = 'none';
+          document.getElementById('perfByRegime').style.display = 'none';
         } else {
-          regimeLabel.textContent = 'By regime';
-          renderPerfList('perfByRegime', data.byRegime, function(r) {
-            return r.toUpperCase();
-          });
+          regimeLabel.style.display = 'block';
+          document.getElementById('perfByRegime').style.display = 'flex';
+          if (data.strategy === 'accumulator') {
+            // Reuses the same "by regime" list/label for the accumulator's
+            // survival-focused breakdown instead - how each trade actually
+            // ended (hit take-profit, got knocked out, or force-sold by
+            // the safety timer), which is the metric that matters here.
+            regimeLabel.textContent = 'By exit reason';
+            var exitReasonLabels = { take_profit: 'Take Profit', knockout: 'Knockout', timeout: 'Timeout (safety sell)' };
+            renderPerfList('perfByRegime', data.byExitReason || {}, function(r) {
+              return exitReasonLabels[r] || r.toUpperCase();
+            });
+          } else {
+            regimeLabel.textContent = 'By regime';
+            renderPerfList('perfByRegime', data.byRegime, function(r) {
+              return r.toUpperCase();
+            });
+          }
         }
 
         renderPerfList('perfBySymbol', data.bySymbol, function(s) {
@@ -1385,6 +1423,8 @@
       accumulatorTakeProfitPct: parseInt(document.getElementById('accumulatorTakeProfitInput').value) / 100,
       accumulatorAdxMaxEntry: parseInt(document.getElementById('accumulatorAdxMaxInput').value),
       accumulatorMaxHoldMinutes: parseInt(document.getElementById('accumulatorMaxHoldInput').value),
+      evenOddLookback: parseInt(document.getElementById('evenOddLookbackInput').value),
+      evenOddDurationTicks: parseInt(document.getElementById('evenOddDurationInput').value),
       dailyProfitGoal: parseFloat(document.getElementById('profitGoalInput').value),
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
       maxConsecutiveLosses: parseInt(document.getElementById('maxLossesInput').value),

@@ -1,11 +1,12 @@
 // driver.js
 // Scheduled function - Netlify triggers this automatically on a timer.
 //
-// ONE bot, TWO strategies, ONE switch. settings.activeStrategy decides
-// which logic runs each minute: 'rise_fall' (EMA/RSI on candles) or
-// 'accumulator' (ADX-gated entry into an Accumulator contract). Only one
-// runs per invocation - they are not run in parallel. Switching strategies
-// in the dashboard takes effect on the NEXT scheduled run.
+// ONE bot, THREE strategies, ONE switch. settings.activeStrategy decides
+// which logic runs each minute: 'rise_fall' (EMA/RSI on candles),
+// 'accumulator' (ADX-gated entry into an Accumulator contract), or
+// 'even_odd' (fade-the-hot-parity heuristic on DIGITEVEN/DIGITODD).
+// Only one runs per invocation - they are not run in parallel. Switching
+// strategies in the dashboard takes effect on the NEXT scheduled run.
 //
 // Each strategy keeps its own separate memory/risk state (keyed by
 // strategy name), so switching back and forth doesn't mix up stats.
@@ -29,6 +30,7 @@ const risk = require('./risk');
 const telegram = require('./telegram');
 const riseFallStrategy = require('./strategy_rise_fall');
 const accumulatorStrategy = require('./strategy_accumulator');
+const evenOddStrategy = require('./strategy_even_odd');
 const { getOtpWebSocketUrl } = require('./deriv-auth');
 
 // ---- Config ----
@@ -89,9 +91,14 @@ exports.handler = async function () {
       await memory.saveSettings({ stakeAmount: maxSafeStake });
     }
 
-    const result = strategyName === 'accumulator'
-      ? await runAccumulatorStrategy(token, app_id, settings)
-      : await runRiseFallStrategy(token, app_id, settings);
+    let result;
+    if (strategyName === 'accumulator') {
+      result = await runAccumulatorStrategy(token, app_id, settings);
+    } else if (strategyName === 'even_odd') {
+      result = await runEvenOddStrategy(token, app_id, settings);
+    } else {
+      result = await runRiseFallStrategy(token, app_id, settings);
+    }
 
     // A clean run clears any failure streak - a single blip shouldn't
     // linger toward the kill switch threshold indefinitely.
@@ -397,6 +404,86 @@ async function computeRiseFallSignal(symbol, candles, settings) {
   });
 
   return { symbol, signal: signalResult.signal, reason: signalResult.reason, details: signalResult.details, regime, adx, confidence: signalResult.details ? signalResult.details.confidence : undefined };
+}
+
+// ---- EVEN/ODD branch ----
+// Same short-lived lifecycle as Rise/Fall (settles within a handful of
+// ticks), so this can block a single invocation on placeContractAndWait()
+// too, instead of the accumulator's buy-and-poll pattern.
+async function runEvenOddStrategy(token, app_id, settings) {
+  const STRATEGY_NAME = 'even_odd';
+  const symbol = settings.symbol;
+  const lookback = settings.evenOddLookback || 20;
+  const durationTicks = settings.evenOddDurationTicks || 1;
+
+  const tickAuth = await getOtpWebSocketUrl(token, app_id);
+  const tickData = await connectAndGetTicksForCandles(tickAuth.wsUrl, symbol, lookback + 5);
+
+  const signalResult = evenOddStrategy.getSignal(tickData.prices, { lookback });
+  console.log('Even/odd signal check:', signalResult.reason);
+  if (signalResult.signal) {
+    await memory.appendLog(STRATEGY_NAME, `Signal: ${signalResult.signal === 'DIGITEVEN' ? 'EVEN' : 'ODD'} - ${signalResult.reason}`, 'info');
+  }
+
+  if (!signalResult.signal) {
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: 'No trade signal this run', ...signalResult });
+  }
+
+  const riskCheck = await handleRiskGate(STRATEGY_NAME);
+  if (!riskCheck.canTrade) {
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
+  }
+
+  const stake = await getScaledStake(STRATEGY_NAME, settings);
+  const direction = signalResult.signal === 'DIGITEVEN' ? 'EVEN' : 'ODD';
+  await memory.setActiveTrade(STRATEGY_NAME, {
+    direction,
+    symbol,
+    stake,
+    placedAt: new Date().toISOString()
+  });
+
+  const tradeAuth = await getOtpWebSocketUrl(token, app_id);
+  const tradeResult = await placeContractAndWait(tradeAuth.wsUrl, {
+    contract_type: signalResult.signal,
+    underlying_symbol: symbol,
+    duration: durationTicks,
+    duration_unit: 't',
+    basis: 'stake',
+    amount: stake,
+    currency: 'USD'
+  }, stake, (contractId) => {
+    memory.setActiveTrade(STRATEGY_NAME, {
+      direction,
+      symbol,
+      stake,
+      contractId,
+      placedAt: new Date().toISOString()
+    }).catch((e) => console.log('Failed to persist contract ID:', e.message));
+  });
+
+  if (tradeResult.error) {
+    console.log('Trade execution error:', tradeResult.error);
+    if (!tradeResult.contractPlaced) {
+      await memory.clearActiveTrade(STRATEGY_NAME);
+    } else {
+      console.log('Contract was placed but settlement wait timed out - leaving active trade marker for reconciliation next run.');
+    }
+    return respond({ message: 'Trade failed to execute', error: tradeResult.error });
+  }
+
+  const updatedState = await recordAndLogTrade(STRATEGY_NAME, direction, symbol, stake, tradeResult);
+  await handlePostTradeRisk(STRATEGY_NAME, updatedState);
+  await maybeSendEODReport(STRATEGY_NAME);
+
+  return respond({
+    message: `Trade placed: ${direction} - ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
+    signal: signalResult,
+    trade: tradeResult,
+    state: updatedState
+  });
 }
 
 // ---- ACCUMULATOR branch ----
