@@ -127,15 +127,17 @@ async function handleStatus() {
   return telegram.sendMessage(text);
 }
 
+const VALID_STRATEGIES = ['rise_fall', 'accumulator', 'even_odd', 'hybrid'];
+
 async function handleStrategy(arg) {
   if (!arg) {
     const settings = await memory.loadSettings();
-    return telegram.sendMessage(`Current strategy: <b>${settings.activeStrategy || 'rise_fall'}</b>\nSend /strategy rise_fall or /strategy accumulator to switch.`);
+    return telegram.sendMessage(`Current strategy: <b>${settings.activeStrategy || 'rise_fall'}</b>\nSend /strategy with one of: ${VALID_STRATEGIES.join(', ')}.`);
   }
 
   const strategyName = arg.toLowerCase();
-  if (strategyName !== 'rise_fall' && strategyName !== 'accumulator') {
-    return telegram.sendMessage('Strategy must be "rise_fall" or "accumulator".');
+  if (!VALID_STRATEGIES.includes(strategyName)) {
+    return telegram.sendMessage(`Strategy must be one of: ${VALID_STRATEGIES.join(', ')}.`);
   }
 
   const saved = await memory.saveSettings({ activeStrategy: strategyName });
@@ -166,7 +168,7 @@ async function handleHelp() {
     '/start - resume trading\n' +
     '/stop - pause trading\n' +
     '/status - current status, P&amp;L, active trade\n' +
-    '/strategy [rise_fall|accumulator] - view or switch strategy\n' +
+    '/strategy [rise_fall|accumulator|even_odd|hybrid] - view or switch strategy\n' +
     '/stake [amount] - view or change stake\n' +
     '/help - this message'
   );

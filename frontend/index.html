@@ -408,7 +408,7 @@
 
   .strategy-toggle {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
     margin-bottom: 4px;
   }
@@ -636,6 +636,7 @@
       <button type="button" class="strategy-btn" id="riseFallBtn" data-strategy="rise_fall">Rise/Fall</button>
       <button type="button" class="strategy-btn" id="accumulatorBtn" data-strategy="accumulator">Accumulator</button>
       <button type="button" class="strategy-btn" id="evenOddBtn" data-strategy="even_odd">Even/Odd</button>
+      <button type="button" class="strategy-btn" id="hybridBtn" data-strategy="hybrid">Hybrid</button>
     </div>
 
     <div id="autoSelectSection">
@@ -780,6 +781,11 @@
         </div>
       </div>
       <p class="settings-note" style="text-align:left;margin-top:6px;">Honest note: a synthetic index's last digit is close to uniformly even/odd, so this is close to a coin flip - bets against whichever parity has been more frequent over the lookback window, purely a heuristic rather than a real statistical edge.</p>
+    </div>
+
+    <div id="hybridSettings" style="display:none;">
+      <p class="settings-section-label">Hybrid</p>
+      <p class="settings-note" style="text-align:left;">Reads ADX on your chosen symbol each run and picks a style automatically: calm &rarr; Accumulator, trending &rarr; Rise/Fall, unclear &rarr; Even/Odd. Uses whatever Rise/Fall, Accumulator, and Even/Odd are already configured to (switch to each tab to tune them) - just set your stake and risk limits below and it runs on its own. Tracked as its own strategy with its own stats, separate from running each style manually.</p>
     </div>
 
     <p class="settings-section-label">Risk management</p>
@@ -1147,7 +1153,8 @@
   var STRATEGY_LABELS = {
     rise_fall: 'RISE/FALL',
     accumulator: 'ACCUMULATOR',
-    even_odd: 'EVEN/ODD'
+    even_odd: 'EVEN/ODD',
+    hybrid: 'HYBRID'
   };
 
   function loadSettings() {
@@ -1197,7 +1204,7 @@
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
     var strategyLabel = STRATEGY_LABELS[selectedStrategy] || 'RISE/FALL';
-    if (settings.autoSelectSymbol && selectedStrategy !== 'even_odd') {
+    if (settings.autoSelectSymbol && NO_AUTO_SELECT_STRATEGIES.indexOf(selectedStrategy) === -1) {
       document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 AUTO-SCAN \u00B7 DEMO';
     } else {
       document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 ' + symLabel.toUpperCase() + ' \u00B7 DEMO';
@@ -1244,17 +1251,21 @@
     document.getElementById('watchlistCount').textContent = count + ' of 3 selected';
   }
 
+  // even_odd and hybrid are both single-symbol only - no watchlist-scan
+  // support in driver.js for either (hybrid always forces manual-symbol
+  // mode on whichever style it picks, see runHybridStrategy).
+  var NO_AUTO_SELECT_STRATEGIES = ['even_odd', 'hybrid'];
+
   function updateStrategyToggleUI() {
     document.getElementById('riseFallBtn').className = 'strategy-btn' + (selectedStrategy === 'rise_fall' ? ' selected' : '');
     document.getElementById('accumulatorBtn').className = 'strategy-btn' + (selectedStrategy === 'accumulator' ? ' selected' : '');
     document.getElementById('evenOddBtn').className = 'strategy-btn' + (selectedStrategy === 'even_odd' ? ' selected' : '');
+    document.getElementById('hybridBtn').className = 'strategy-btn' + (selectedStrategy === 'hybrid' ? ' selected' : '');
     document.getElementById('riseFallSettings').style.display = selectedStrategy === 'rise_fall' ? 'block' : 'none';
     document.getElementById('accumulatorSettings').style.display = selectedStrategy === 'accumulator' ? 'block' : 'none';
     document.getElementById('evenOddSettings').style.display = selectedStrategy === 'even_odd' ? 'block' : 'none';
-    // Auto-select-symbol only exists for rise_fall/accumulator - even_odd
-    // has no watchlist-scan support in driver.js, so hide it entirely
-    // rather than show a toggle that would silently do nothing.
-    document.getElementById('autoSelectSection').style.display = selectedStrategy === 'even_odd' ? 'none' : 'block';
+    document.getElementById('hybridSettings').style.display = selectedStrategy === 'hybrid' ? 'block' : 'none';
+    document.getElementById('autoSelectSection').style.display = NO_AUTO_SELECT_STRATEGIES.indexOf(selectedStrategy) === -1 ? 'block' : 'none';
     document.getElementById('autoSelectLabel').textContent = selectedStrategy === 'accumulator'
       ? 'Auto-select calmest symbol - scans 3 watchlist symbols each run, trades whichever has the lowest volatility'
       : 'Auto-select best symbol - scans 3 watchlist symbols each run, trades whichever has the strongest signal';
@@ -1262,7 +1273,7 @@
   }
 
   function updateSymbolSectionVisibility() {
-    var autoOn = selectedStrategy !== 'even_odd' && document.getElementById('autoSelectInput').checked;
+    var autoOn = NO_AUTO_SELECT_STRATEGIES.indexOf(selectedStrategy) === -1 && document.getElementById('autoSelectInput').checked;
     document.getElementById('manualSymbolSection').style.display = autoOn ? 'none' : 'block';
     document.getElementById('watchlistSection').style.display = autoOn ? 'block' : 'none';
   }
@@ -1279,6 +1290,10 @@
   });
   document.getElementById('evenOddBtn').addEventListener('click', function() {
     selectedStrategy = 'even_odd';
+    updateStrategyToggleUI();
+  });
+  document.getElementById('hybridBtn').addEventListener('click', function() {
+    selectedStrategy = 'hybrid';
     updateStrategyToggleUI();
   });
 
@@ -1364,6 +1379,15 @@
             var exitReasonLabels = { take_profit: 'Take Profit', knockout: 'Knockout', timeout: 'Timeout (safety sell)' };
             renderPerfList('perfByRegime', data.byExitReason || {}, function(r) {
               return exitReasonLabels[r] || r.toUpperCase();
+            });
+          } else if (data.strategy === 'hybrid') {
+            // Hybrid has its own stats bucket - the breakdown that matters
+            // here is which underlying style it picked each run, not a
+            // regime or exit reason (those belong to the picked style).
+            regimeLabel.textContent = 'By style';
+            var subStrategyLabels = { rise_fall: 'Rise/Fall', accumulator: 'Accumulator', even_odd: 'Even/Odd' };
+            renderPerfList('perfByRegime', data.bySubStrategy || {}, function(s) {
+              return subStrategyLabels[s] || s.toUpperCase();
             });
           } else {
             regimeLabel.textContent = 'By regime';
