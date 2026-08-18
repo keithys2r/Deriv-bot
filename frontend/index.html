@@ -474,6 +474,38 @@
     border: 1px solid var(--phosphor);
   }
 
+  .account-banner {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 20px;
+    margin: 0 0 12px;
+  }
+
+  .account-banner.demo {
+    color: var(--ink-dim);
+    background: rgba(100, 112, 125, 0.1);
+    border: 1px solid var(--panel-border);
+  }
+
+  .account-banner.live {
+    color: var(--red);
+    background: rgba(255, 92, 92, 0.12);
+    border: 1px solid var(--red);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+
+  .health-warning {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--red);
+    margin: 6px 0 0;
+  }
+
   .perf-section-label {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 11px;
@@ -545,7 +577,9 @@
 
   <h1>BandzzBot</h1>
   <p class="subtitle" id="subtitleSymbol">RISE/FALL &middot; VOLATILITY 100 &middot; DEMO</p>
+  <p class="account-banner demo" id="accountBanner" style="display:none;"></p>
   <p class="regime-badge" id="regimeBadge" style="display:none;"></p>
+  <p class="health-warning" id="healthWarning" style="display:none;"></p>
 
   <div class="balance-card">
     <p class="stat-label">Account balance</p>
@@ -789,6 +823,15 @@
     <div id="perfBySymbol" class="perf-list"></div>
   </div>
 
+  <button class="settings-toggle" id="errorLogToggle" style="margin-top:12px;">Error log &#9662;</button>
+
+  <div class="log-panel" id="errorLogPanel" style="display:none;">
+    <p class="log-header">Real errors, separate from routine trade activity</p>
+    <div class="log-lines" id="errorLogLines">
+      <div class="log-line"><span class="empty-log">No errors recorded.</span></div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -945,6 +988,19 @@
       statusText.textContent = 'RUNNING';
     }
 
+    // Surfaces degrading health BEFORE the kill switch trips (it auto-
+    // pauses at API_FAILURE_KILL_SWITCH, currently 5) - so a human sees
+    // "something's wrong" instead of only finding out after the bot has
+    // already stopped itself.
+    var healthWarning = document.getElementById('healthWarning');
+    if (data.consecutiveApiFailures > 0) {
+      healthWarning.style.display = 'block';
+      healthWarning.textContent = '⚠ ' + data.consecutiveApiFailures + ' consecutive API failure' + (data.consecutiveApiFailures === 1 ? '' : 's') +
+        (data.manualPause ? ' - bot auto-paused, hit Start once things look healthy again' : '');
+    } else {
+      healthWarning.style.display = 'none';
+    }
+
     var netPnl = document.getElementById('netPnl');
     netPnl.textContent = fmtMoney(data.netProfit);
     netPnl.className = 'stat-value ' + (data.netProfit > 0 ? 'pos' : data.netProfit < 0 ? 'neg' : 'neutral');
@@ -964,6 +1020,17 @@
       }).join('');
     } else {
       logLines.innerHTML = '<div class="log-line"><span class="empty-log">No events yet - waiting for the bot to run.</span></div>';
+    }
+
+    // Separate from the routine live log above on purpose - real
+    // failures shouldn't get buried under normal trade activity.
+    var errorLogLines = document.getElementById('errorLogLines');
+    if (data.recentErrors && data.recentErrors.length > 0) {
+      errorLogLines.innerHTML = data.recentErrors.map(function(ev) {
+        return '<div class="log-line"><span class="log-time">' + fmtTime(ev.time) + '</span><span class="log-msg loss">' + ev.message + '</span></div>';
+      }).join('');
+    } else {
+      errorLogLines.innerHTML = '<div class="log-line"><span class="empty-log">No errors recorded.</span></div>';
     }
 
     var tradeLabel = document.getElementById('tradeCardLabel');
@@ -1028,10 +1095,30 @@
           return;
         }
         el.textContent = '$' + Number(data.balance).toFixed(2) + ' ' + data.currency;
+        renderAccountBanner(data.accountType);
       })
       .catch(function() {
         document.getElementById('balanceValue').textContent = '--';
       });
+  }
+
+  // Reflects whichever account Deriv actually connected to (accountType
+  // comes straight from balance.js's own auth response) - never guessed
+  // or inferred client-side, since this is the one indicator that must
+  // never be wrong about whether real money is on the line.
+  function renderAccountBanner(accountType) {
+    var banner = document.getElementById('accountBanner');
+    if (accountType === 'real') {
+      banner.className = 'account-banner live';
+      banner.textContent = '⚠ LIVE ACCOUNT — REAL MONEY';
+      banner.style.display = 'inline-block';
+    } else if (accountType === 'demo') {
+      banner.className = 'account-banner demo';
+      banner.textContent = 'DEMO ACCOUNT';
+      banner.style.display = 'inline-block';
+    } else {
+      banner.style.display = 'none';
+    }
   }
 
   var SYMBOL_LABELS = {
@@ -1264,6 +1351,13 @@
     if (isHidden) loadStats(); // always refresh on open, not just first time
   });
 
+  // No separate fetch needed here - errorLogLines is already kept fresh
+  // by render() on every 5s status poll, this just shows/hides it.
+  document.getElementById('errorLogToggle').addEventListener('click', function() {
+    var panel = document.getElementById('errorLogPanel');
+    panel.style.display = (panel.style.display === 'none') ? 'block' : 'none';
+  });
+
   document.getElementById('saveSettingsBtn').addEventListener('click', function() {
     var selectedChip = document.querySelector('.symbol-chip.selected');
     var note = document.getElementById('settingsNote');
@@ -1332,9 +1426,9 @@
   poll();
   pollBalance();
   pollChart();
-  setInterval(poll, 5000);
-  setInterval(pollBalance, 20000);
-  setInterval(pollChart, 15000);
+  setInterval(poll, 5000); // primary "is it alive" signal, stays fast
+  setInterval(pollBalance, 60000); // was 20000 - eases sustained Deriv connection load
+  setInterval(pollChart, 30000); // was 15000 - same reason
 </script>
 
 </body>

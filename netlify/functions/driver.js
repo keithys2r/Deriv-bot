@@ -61,9 +61,14 @@ exports.handler = async function () {
     return { statusCode: 200, body: JSON.stringify({ message: 'Skipped - overlapping invocation detected' }) };
   }
 
+  // Resolved inside the try block below, but declared here so the catch
+  // block can still record the failure against the right strategy even
+  // if the error happened before settings finished loading.
+  let strategyName = 'rise_fall';
+
   try {
     const settings = await memory.loadSettings();
-    const strategyName = settings.activeStrategy || 'rise_fall';
+    strategyName = settings.activeStrategy || 'rise_fall';
 
     // Recover from a previous run that died mid-trade before this run
     // does anything else - a killed function can leave a contract open
@@ -84,13 +89,35 @@ exports.handler = async function () {
       await memory.saveSettings({ stakeAmount: maxSafeStake });
     }
 
-    if (strategyName === 'accumulator') {
-      return await runAccumulatorStrategy(token, app_id, settings);
-    } else {
-      return await runRiseFallStrategy(token, app_id, settings);
-    }
+    const result = strategyName === 'accumulator'
+      ? await runAccumulatorStrategy(token, app_id, settings)
+      : await runRiseFallStrategy(token, app_id, settings);
+
+    // A clean run clears any failure streak - a single blip shouldn't
+    // linger toward the kill switch threshold indefinitely.
+    await memory.recordApiSuccess(strategyName);
+    return result;
   } catch (err) {
     console.log('driver.js error:', err.message);
+    await memory.appendErrorLog(strategyName, err.message);
+
+    // Kill switch: too many consecutive failed runs means something is
+    // structurally broken (bad token, Deriv outage, sustained
+    // throttling) rather than one-off - auto-pause instead of silently
+    // failing forever with nobody finding out except by reading logs.
+    const state = await memory.recordApiFailure(strategyName);
+    if (state.consecutiveApiFailures >= memory.API_FAILURE_KILL_SWITCH) {
+      if (!state.manualPause) {
+        state.manualPause = true;
+        console.log(`Kill switch tripped: ${state.consecutiveApiFailures} consecutive failures - auto-pausing ${strategyName}.`);
+      }
+      if (!state.killSwitchAlertSent) {
+        state.killSwitchAlertSent = true;
+        await telegram.alertPaused(strategyName, `Auto-paused after ${state.consecutiveApiFailures} consecutive API failures - hit Start once things look healthy again.`);
+      }
+      await memory.saveState(strategyName, state);
+    }
+
     return respond({ message: 'Error: ' + err.message });
   } finally {
     // Always release, even if something above threw or timed out,
@@ -108,10 +135,15 @@ async function runRiseFallStrategy(token, app_id, settings) {
   if (settings.autoSelectSymbol) {
     const watchlist = (settings.watchlist && settings.watchlist.length === 3) ? settings.watchlist : ['R_100', 'R_75', 'R_50'];
 
-    // Scan all watchlist symbols concurrently - sequential would risk
-    // blowing Netlify's 30s execution ceiling with 3x the fetch time.
+    // Fetch all 3 symbols' candles in one batched connection (see
+    // fetchCandlesForWatchlist) instead of one auth+connection per
+    // symbol, then compute each signal from the already-fetched candles.
+    const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
+    const granularitySeconds = settings.candleGranularitySeconds || 15;
+    const candlesBySymbol = await fetchCandlesForWatchlist(token, app_id, watchlist, neededCandles, granularitySeconds);
+
     const scanResults = await Promise.all(
-      watchlist.map((sym) => getSymbolSignal(token, app_id, sym, settings).catch((err) => ({
+      watchlist.map((sym) => computeRiseFallSignal(sym, candlesBySymbol[sym] || [], settings).catch((err) => ({
         symbol: sym, signal: null, reason: `Scan error: ${err.message}`, adx: null, regime: null
       })))
     );
@@ -240,14 +272,66 @@ async function fetchCandlesForSymbol(token, app_id, symbol, neededCandles, granu
   return candles;
 }
 
-// Fetches candles, computes regime (per-symbol, since different symbols
-// can be in different regimes at once), and returns a signal - the core
-// per-symbol logic shared by both manual mode and the watchlist scanner.
+// Batched version of fetchCandlesForSymbol for scanning a whole
+// watchlist at once: authenticates ONCE and fetches tick history for
+// every symbol over a single WebSocket connection, instead of each
+// symbol paying its own getOtpWebSocketUrl round-trip (2 REST calls +
+// a fresh one-time OTP token each). Only symbols that come up short on
+// tick history fall back to an individual native-candle request - most
+// scans need zero fallback calls at all.
+async function fetchCandlesForWatchlist(token, app_id, symbols, neededCandles, granularitySeconds) {
+  const auth = await getOtpWebSocketUrl(token, app_id);
+  const tickCount = Math.min(Math.max(neededCandles * 15, 1000), 5000);
+
+  let tickResults;
+  try {
+    tickResults = await connectAndGetTicksForSymbols(auth.wsUrl, symbols, tickCount);
+  } catch (err) {
+    // Whole-connection failure - fall through and let every symbol
+    // retry individually below rather than losing the entire scan.
+    console.log(`Batched tick fetch failed (${err.message}) - falling back to per-symbol native candles.`);
+    tickResults = {};
+  }
+
+  const candlesBySymbol = {};
+  for (const symbol of symbols) {
+    const tickData = tickResults[symbol];
+    let candles = tickData ? buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds) : [];
+
+    if (candles.length < neededCandles) {
+      console.log(`[${symbol}] Tick-based candles insufficient (${candles.length}/${neededCandles}) - falling back to native candles.`);
+      try {
+        const fallbackAuth = await getOtpWebSocketUrl(token, app_id);
+        candles = await connectAndGetNativeCandles(fallbackAuth.wsUrl, symbol, neededCandles);
+      } catch (err) {
+        console.log(`[${symbol}] Native candle fallback also failed: ${err.message}`);
+        candles = [];
+      }
+    }
+
+    candlesBySymbol[symbol] = candles;
+  }
+
+  return candlesBySymbol;
+}
+
+// Fetches candles for one symbol, then computes its signal - the manual-
+// symbol path. The watchlist scanner instead fetches all symbols' candles
+// in one batch (fetchCandlesForWatchlist) and calls computeRiseFallSignal
+// directly per symbol, since the fetch is what's expensive to repeat.
 async function getSymbolSignal(token, app_id, symbol, settings) {
   const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
   const granularitySeconds = settings.candleGranularitySeconds || 15;
   const candles = await fetchCandlesForSymbol(token, app_id, symbol, neededCandles, granularitySeconds);
+  return computeRiseFallSignal(symbol, candles, settings);
+}
 
+// Computes regime (per-symbol, since different symbols can be in
+// different regimes at once) and a signal from already-fetched candles.
+// No I/O of its own - pure computation plus the regime persistence in
+// memory.js, split out from getSymbolSignal so the watchlist scanner can
+// reuse it without re-fetching candles per symbol.
+async function computeRiseFallSignal(symbol, candles, settings) {
   const closes = candles.map((c) => c.close);
 
   let regime = 'range';
@@ -311,15 +395,18 @@ async function runAccumulatorStrategy(token, app_id, settings) {
   if (settings.autoSelectSymbol) {
     const watchlist = (settings.watchlist && settings.watchlist.length === 3) ? settings.watchlist : ['R_100', 'R_75', 'R_50'];
 
-    // Scan all watchlist symbols concurrently, same reasoning as
-    // rise_fall's scan: sequential risks blowing the 30s execution ceiling.
-    const scanResults = await Promise.all(
-      watchlist.map((sym) =>
-        fetchCandlesForSymbol(token, app_id, sym, neededCandles, granularitySeconds)
-          .then((candles) => ({ symbol: sym, ...accumulatorStrategy.getEntryDecision(candles, { adxPeriod, adxMaxEntry }) }))
-          .catch((err) => ({ symbol: sym, canEnter: false, reason: `Scan error: ${err.message}`, adx: null }))
-      )
-    );
+    // Fetch all 3 symbols' candles in one batched connection (see
+    // fetchCandlesForWatchlist) instead of one auth+connection per
+    // symbol, then run the entry gate on each already-fetched result.
+    const candlesBySymbol = await fetchCandlesForWatchlist(token, app_id, watchlist, neededCandles, granularitySeconds);
+
+    const scanResults = watchlist.map((sym) => {
+      try {
+        return { symbol: sym, ...accumulatorStrategy.getEntryDecision(candlesBySymbol[sym] || [], { adxPeriod, adxMaxEntry }) };
+      } catch (err) {
+        return { symbol: sym, canEnter: false, reason: `Scan error: ${err.message}`, adx: null };
+      }
+    });
 
     const summary = scanResults.map((r) => `${r.symbol}: ${r.adx !== null && r.adx !== undefined ? `ADX ${r.adx.toFixed(1)}` : 'n/a'}${r.canEnter ? ' (OK)' : ''}`).join(' | ');
     console.log('Accumulator watchlist scan:', summary);
@@ -830,6 +917,71 @@ function connectAndGetTicksForCandles(wsUrl, symbol, count) {
           prices: history.prices || [],
           times: history.times || []
         });
+      }
+    };
+
+    ws.onerror = (err) => {
+      clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        reject(new Error('WS Error: ' + err.message));
+      }
+    };
+  });
+}
+
+// Batched version of connectAndGetTicksForCandles - fetches tick history
+// for MULTIPLE symbols over ONE WebSocket connection instead of one
+// connection per symbol, by tagging each request with req_id (Deriv
+// echoes it back verbatim) so responses can be matched to the symbol
+// that asked for them. This is what actually cuts the per-scan Deriv
+// connection/auth load (see fetchCandlesForWatchlist).
+function connectAndGetTicksForSymbols(wsUrl, symbols, count) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    let resolved = false;
+    const results = {}; // symbol -> { prices, times } | null (per-symbol error)
+    let remaining = symbols.length;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.close(); } catch (e) {}
+        reject(new Error('Timeout waiting for batched tick history'));
+      }
+    }, 8000);
+
+    ws.onopen = () => {
+      symbols.forEach((symbol) => {
+        ws.send(JSON.stringify({
+          ticks_history: symbol,
+          style: 'ticks',
+          count: count,
+          end: 'latest',
+          req_id: symbol
+        }));
+      });
+    };
+
+    ws.onmessage = (event) => {
+      const res = JSON.parse(event.data);
+      const symbol = res.req_id;
+      if (!symbol || results[symbol] !== undefined) return; // already resolved or unrelated message
+
+      if (res.error) {
+        results[symbol] = null;
+        remaining--;
+      } else if (res.msg_type === 'history') {
+        const history = res.history || (res.data && res.data.history) || {};
+        results[symbol] = { prices: history.prices || [], times: history.times || [] };
+        remaining--;
+      }
+
+      if (remaining <= 0 && !resolved) {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        resolve(results);
       }
     };
 

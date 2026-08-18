@@ -1,6 +1,9 @@
 {
   "name": "deriv-bot",
   "version": "1.0.0",
+  "scripts": {
+    "test": "node test/run.js"
+  },
   "dependencies": {
     "@netlify/blobs": "^7.0.0"
   }

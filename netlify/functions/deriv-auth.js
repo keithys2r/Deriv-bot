@@ -8,6 +8,14 @@ const REST_TIMEOUT_MS = 6000; // each REST call gets its own hard timeout,
                                // since fetch() has no built-in one and a
                                // hang here could push total execution
                                // past Netlify's 30s scheduled function limit
+const RETRY_DELAYS_MS = [500, 1500]; // retries a timeout/network failure twice
+                                      // before giving up - a genuine Deriv
+                                      // rejection (non-2xx with a real body)
+                                      // is NOT retried, it fails immediately
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function fetchWithTimeout(url, options) {
   const controller = new AbortController();
@@ -15,8 +23,35 @@ function fetchWithTimeout(url, options) {
   return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
 }
 
+// Retries fetchWithTimeout on a network/timeout failure (fetch() itself
+// throwing - abort, DNS, connection reset) with a short delay between
+// attempts. Does NOT retry a response that came back with a real HTTP
+// status - that's Deriv actually answering, just with a rejection, and
+// hammering it again won't change the answer.
+async function fetchWithRetry(url, options) {
+  let lastErr;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fetchWithTimeout(url, options);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < RETRY_DELAYS_MS.length) {
+        console.log(`Deriv REST call failed (${err.message}), retrying in ${RETRY_DELAYS_MS[attempt]}ms...`);
+        await sleep(RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
-  const accountsRes = await fetchWithTimeout(`${API_BASE}/trading/v1/options/accounts`, {
+  // Hard gate, not just a default: even if a caller passes preferDemo:
+  // false, it's overridden back to true unless ALLOW_LIVE_TRADING is
+  // explicitly set. A real-money connection requires deliberately
+  // setting an env var, not just a function argument somewhere changing.
+  const effectivePreferDemo = isLiveTradingAllowed() ? preferDemo : true;
+
+  const accountsRes = await fetchWithRetry(`${API_BASE}/trading/v1/options/accounts`, {
     headers: {
       'Deriv-App-ID': app_id,
       'Authorization': `Bearer ${token}`
@@ -41,7 +76,7 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
     throw new Error('No accounts returned from Deriv: ' + JSON.stringify(accountsData));
   }
 
-  const targetAccount = preferDemo
+  const targetAccount = effectivePreferDemo
     ? (accounts.find((a) => a.account_type === 'demo') || accounts[0])
     : (accounts.find((a) => a.account_type === 'real') || accounts[0]);
 
@@ -50,7 +85,7 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
     throw new Error('Could not determine account ID from: ' + JSON.stringify(targetAccount));
   }
 
-  const otpRes = await fetchWithTimeout(`${API_BASE}/trading/v1/options/accounts/${accountId}/otp`, {
+  const otpRes = await fetchWithRetry(`${API_BASE}/trading/v1/options/accounts/${accountId}/otp`, {
     method: 'POST',
     headers: {
       'Deriv-App-ID': app_id,
@@ -79,4 +114,13 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
   return { wsUrl, accountId, account: targetAccount };
 }
 
-module.exports = { getOtpWebSocketUrl };
+// Hard gate on real-money trading: demo is the default no matter what a
+// caller passes as preferDemo, unless this env var is explicitly set to
+// the string 'true'. Centralized here so every function that opens a
+// Deriv connection enforces the same rule instead of relying on each
+// call site remembering to pass the right flag.
+function isLiveTradingAllowed() {
+  return process.env.ALLOW_LIVE_TRADING === 'true';
+}
+
+module.exports = { getOtpWebSocketUrl, isLiveTradingAllowed };
