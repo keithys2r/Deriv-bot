@@ -220,7 +220,7 @@ const SETTINGS_KEY = 'bot_settings';
 
 function defaultSettings() {
   return {
-    activeStrategy: 'rise_fall', // 'rise_fall' | 'accumulator' | 'even_odd' - the switch
+    activeStrategy: 'rise_fall', // 'rise_fall' | 'accumulator' | 'even_odd' | 'hybrid' - the switch
     symbol: 'R_100',
     autoSelectSymbol: false,
     watchlist: ['R_100', 'R_75', 'R_50'],
@@ -409,7 +409,8 @@ async function recordTradeHistory(strategyName, record) {
     won: record.won,
     profit: record.profit,
     exitReason: record.exitReason || null, // accumulator only: 'take_profit' | 'knockout' | 'timeout'
-    holdSeconds: record.holdSeconds !== undefined ? record.holdSeconds : null // accumulator only
+    holdSeconds: record.holdSeconds !== undefined ? record.holdSeconds : null, // accumulator only
+    subStrategy: record.subStrategy || null // hybrid only: 'rise_fall' | 'accumulator' | 'even_odd' - which style hybrid picked for this trade
   });
 
   if (history.length > TRADE_HISTORY_MAX) {
@@ -439,6 +440,7 @@ async function computeStats(strategyName) {
   const byRegime = {}; // 'trend' | 'range' -> { wins, losses, profit }
   const bySymbol = {}; // symbol -> { wins, losses, profit }
   const byExitReason = {}; // accumulator only: 'take_profit' | 'knockout' | 'timeout' -> { wins, losses, profit }
+  const bySubStrategy = {}; // hybrid only: 'rise_fall' | 'accumulator' | 'even_odd' -> { wins, losses, profit }
 
   let totalWins = 0;
   let totalLosses = 0;
@@ -467,6 +469,13 @@ async function computeStats(strategyName) {
     if (Number.isFinite(t.holdSeconds)) {
       holdSecondsSum += t.holdSeconds;
       holdSecondsCount++;
+    }
+
+    if (t.subStrategy) {
+      if (!bySubStrategy[t.subStrategy]) bySubStrategy[t.subStrategy] = { wins: 0, losses: 0, profit: 0 };
+      if (t.won) bySubStrategy[t.subStrategy].wins++;
+      else bySubStrategy[t.subStrategy].losses++;
+      bySubStrategy[t.subStrategy].profit += p;
     }
 
     if (t.won) {
@@ -512,7 +521,8 @@ async function computeStats(strategyName) {
     byHour: withWinRate(byHour),
     byRegime: withWinRate(byRegime),
     bySymbol: withWinRate(bySymbol),
-    byExitReason: withWinRate(byExitReason)
+    byExitReason: withWinRate(byExitReason),
+    bySubStrategy: withWinRate(bySubStrategy)
   };
 }
 

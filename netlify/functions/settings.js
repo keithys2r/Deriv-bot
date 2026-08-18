@@ -8,6 +8,7 @@ const memory = require('./memory');
 
 const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ25V', '1HZ50V', '1HZ75V', '1HZ100V'];
 const ACCUMULATOR_GROWTH_RATES = [0.01, 0.02, 0.03, 0.04, 0.05]; // Deriv's allowed discrete growth rates
+const VALID_STRATEGIES = ['rise_fall', 'accumulator', 'even_odd', 'hybrid'];
 
 // Shared with telegram-webhook.js, so a stake change via Telegram is
 // held to exactly the same 20%-of-stop-loss rule as one made from the
@@ -63,7 +64,7 @@ exports.handler = async function (event) {
           return respond({ error: `Watchlist needs exactly 3 valid symbols, got ${validWatchlist.length}.` });
         }
       }
-      if (body.activeStrategy === 'rise_fall' || body.activeStrategy === 'accumulator' || body.activeStrategy === 'even_odd') {
+      if (VALID_STRATEGIES.includes(body.activeStrategy)) {
         update.activeStrategy = body.activeStrategy;
       }
 
