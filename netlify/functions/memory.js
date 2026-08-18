@@ -39,6 +39,8 @@ function defaultState() {
     regime: 'range',          // current market regime for adaptive rise/fall: 'trend' | 'range'
     regimeTrendCount: 0,      // consecutive candles ADX has stayed above the trend threshold
     regimeRangeCount: 0,      // consecutive candles ADX has stayed below the range threshold
+    consecutiveApiFailures: 0, // consecutive driver.js runs that errored out - trips the kill switch
+    killSwitchAlertSent: false, // prevents re-alerting every run once the kill switch has already paused the bot
     lastUpdated: new Date().toISOString()
   };
 }
@@ -58,9 +60,13 @@ async function loadState(strategyName) {
 
   // New day detected -> reset daily counters but keep the strategy's identity clean.
   // manualPause carries over - if the user hit STOP, a new day shouldn't silently resume trading.
+  // consecutiveApiFailures/killSwitchAlertSent also carry over - a failure streak spanning
+  // the UTC day boundary is still the same ongoing problem, not a fresh one.
   if (existing.date !== today) {
     const fresh = defaultState();
     fresh.manualPause = existing.manualPause || false;
+    fresh.consecutiveApiFailures = existing.consecutiveApiFailures || 0;
+    fresh.killSwitchAlertSent = existing.killSwitchAlertSent || false;
     return fresh;
   }
 
@@ -150,6 +156,62 @@ async function setManualPause(strategyName, paused) {
     'pause'
   );
   return state;
+}
+
+const API_FAILURE_KILL_SWITCH = 5; // consecutive failed runs before auto-pausing
+
+// Called from driver.js's top-level catch on every failed run. Returns
+// the updated state (not just the count) so the caller can decide
+// whether to trip the kill switch and persist manualPause/alert flags
+// on that same object without loading state a second time.
+async function recordApiFailure(strategyName) {
+  const state = await loadState(strategyName);
+  state.consecutiveApiFailures = (state.consecutiveApiFailures || 0) + 1;
+  await saveState(strategyName, state);
+  return state;
+}
+
+// Called on any successful run - clears the streak so a single blip
+// doesn't linger toward the kill switch threshold indefinitely.
+async function recordApiSuccess(strategyName) {
+  const state = await loadState(strategyName);
+  if (state.consecutiveApiFailures > 0 || state.killSwitchAlertSent) {
+    state.consecutiveApiFailures = 0;
+    state.killSwitchAlertSent = false;
+    await saveState(strategyName, state);
+  }
+}
+
+const ERROR_LOG_MAX = 30; // same cap as recentEvents, kept separate so real
+                           // errors don't get buried under routine info/win/loss lines
+
+// Persistent (well, capped-rolling) error log, separate from appendLog's
+// recentEvents - that list mixes routine trade activity with failures,
+// which buries the signal a human actually needs to see quickly.
+async function appendErrorLog(strategyName, message) {
+  const store = getMemoryStore();
+  const key = `error_log_${strategyName}`;
+  let errorLog;
+  try {
+    errorLog = await store.get(key, { type: 'json' });
+  } catch (e) {
+    errorLog = null;
+  }
+  errorLog = errorLog || [];
+  errorLog.unshift({ time: new Date().toISOString(), message });
+  errorLog = errorLog.slice(0, ERROR_LOG_MAX);
+  await store.setJSON(key, errorLog);
+  return errorLog;
+}
+
+async function getErrorLog(strategyName) {
+  const store = getMemoryStore();
+  try {
+    const errorLog = await store.get(`error_log_${strategyName}`, { type: 'json' });
+    return errorLog || [];
+  } catch (e) {
+    return [];
+  }
 }
 
 // Settings are stored separately from strategy state - these are user-
@@ -565,6 +627,11 @@ module.exports = {
   defaultState,
   appendLog,
   setManualPause,
+  recordApiFailure,
+  recordApiSuccess,
+  appendErrorLog,
+  getErrorLog,
+  API_FAILURE_KILL_SWITCH,
   loadSettings,
   saveSettings,
   defaultSettings,

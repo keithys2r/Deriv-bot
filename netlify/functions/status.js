@@ -13,6 +13,7 @@ exports.handler = async function () {
     const activeTrade = await memory.getActiveTrade(strategyName);
     const lastTrade = await memory.getLastTrade(strategyName);
     const weeklyState = await memory.loadWeeklyState(strategyName);
+    const recentErrors = await memory.getErrorLog(strategyName);
 
     return {
       statusCode: 200,
@@ -38,7 +39,9 @@ exports.handler = async function () {
         activeTrade: activeTrade || null,
         lastTrade: lastTrade || null,
         weeklyNetProfit: weeklyState.weeklyProfit - weeklyState.weeklyLoss,
-        weekStart: weeklyState.weekStart
+        weekStart: weeklyState.weekStart,
+        consecutiveApiFailures: state.consecutiveApiFailures || 0,
+        recentErrors
       })
     };
   } catch (err) {
