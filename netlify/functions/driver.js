@@ -3,12 +3,23 @@
 //
 // ONE bot, TWO strategies, ONE switch. settings.activeStrategy decides
 // which logic runs each minute: 'rise_fall' (EMA/RSI on candles) or
-// 'digit' (Digit Differ on tick frequency). Only one runs per invocation -
-// they are not run in parallel. Switching strategies in the dashboard
-// takes effect on the NEXT scheduled run.
+// 'accumulator' (ADX-gated entry into an Accumulator contract). Only one
+// runs per invocation - they are not run in parallel. Switching strategies
+// in the dashboard takes effect on the NEXT scheduled run.
 //
 // Each strategy keeps its own separate memory/risk state (keyed by
 // strategy name), so switching back and forth doesn't mix up stats.
+//
+// Rise/Fall and Accumulator have different trade LIFECYCLES:
+// Rise/Fall settles within a handful of ticks, so a single invocation can
+// block on placeContractAndWait() until it's done. Accumulators have no
+// fixed expiry - they can stay open for many minutes, far longer than a
+// single ~30s scheduled invocation. So the accumulator path instead BUYS
+// AND RETURNS immediately, then POLLS the open contract on each
+// subsequent run (same pattern reconcileOrphanedTrade already uses for
+// crash recovery: check status, and if not sold yet, leave it and check
+// again next run) until it's sold (via its native take-profit) or the
+// max-hold-time safety timer forces a sell.
 //
 // IMPORTANT: Test with your DEMO token only. Do not point this at a
 // real-money token yet.
@@ -17,7 +28,7 @@ const memory = require('./memory');
 const risk = require('./risk');
 const telegram = require('./telegram');
 const riseFallStrategy = require('./strategy_rise_fall');
-const digitStrategy = require('./strategy_digit');
+const accumulatorStrategy = require('./strategy_accumulator');
 const { getOtpWebSocketUrl } = require('./deriv-auth');
 
 // ---- Config ----
@@ -25,8 +36,6 @@ const RISE_FALL_DURATION = 3; // ticks - shortened from 5 so contracts settle
                                // faster in real time, reducing pressure on
                                // the settle-wait timeout below
 const RISE_FALL_DURATION_UNIT = 't';
-const DIGIT_DURATION = 1; // ticks
-const DIGIT_DURATION_UNIT = 't';
 const EOD_HOUR_UTC = 23;
 const TREND_CONFIRM_CANDLES = 8; // consecutive candles needed to confirm switch into trend regime
 const RANGE_CONFIRM_CANDLES = 5; // consecutive candles needed to confirm switch back to range regime
@@ -58,7 +67,11 @@ exports.handler = async function () {
 
     // Recover from a previous run that died mid-trade before this run
     // does anything else - a killed function can leave a contract open
-    // on Deriv with nothing tracking it locally otherwise.
+    // on Deriv with nothing tracking it locally otherwise. For
+    // 'accumulator' this only handles the pre-buy "no contract ID yet"
+    // crash window - once a contract ID exists, reconcileOrphanedTrade
+    // deliberately leaves it for runAccumulatorStrategy's own poll loop
+    // to resolve (see the strategyName check inside it).
     await reconcileOrphanedTrade(token, app_id, strategyName);
 
     // Safety net: never let a single trade risk more than 20% of the
@@ -71,8 +84,8 @@ exports.handler = async function () {
       await memory.saveSettings({ stakeAmount: maxSafeStake });
     }
 
-    if (strategyName === 'digit') {
-      return await runDigitStrategy(token, app_id, settings);
+    if (strategyName === 'accumulator') {
+      return await runAccumulatorStrategy(token, app_id, settings);
     } else {
       return await runRiseFallStrategy(token, app_id, settings);
     }
@@ -207,13 +220,12 @@ async function runRiseFallStrategy(token, app_id, settings) {
   });
 }
 
-// Fetches candles, computes regime (per-symbol, since different symbols
-// can be in different regimes at once), and returns a signal - the core
-// per-symbol logic shared by both manual mode and the watchlist scanner.
-async function getSymbolSignal(token, app_id, symbol, settings) {
+// Fetches candles for a symbol, building custom tick-bucketed candles
+// first and falling back to Deriv's native 60s candles if there isn't
+// enough tick history yet - shared by both the rise_fall signal path
+// and the accumulator entry-gate path so the fallback logic lives once.
+async function fetchCandlesForSymbol(token, app_id, symbol, neededCandles, granularitySeconds) {
   const candleAuth = await getOtpWebSocketUrl(token, app_id);
-  const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
-  const granularitySeconds = settings.candleGranularitySeconds || 15;
   const tickCount = Math.min(Math.max(neededCandles * 15, 1000), 5000);
 
   const tickData = await connectAndGetTicksForCandles(candleAuth.wsUrl, symbol, tickCount);
@@ -224,6 +236,17 @@ async function getSymbolSignal(token, app_id, symbol, settings) {
     const fallbackAuth = await getOtpWebSocketUrl(token, app_id);
     candles = await connectAndGetNativeCandles(fallbackAuth.wsUrl, symbol, neededCandles);
   }
+
+  return candles;
+}
+
+// Fetches candles, computes regime (per-symbol, since different symbols
+// can be in different regimes at once), and returns a signal - the core
+// per-symbol logic shared by both manual mode and the watchlist scanner.
+async function getSymbolSignal(token, app_id, symbol, settings) {
+  const neededCandles = Math.max(settings.emaSlowPeriod, settings.rsiPeriod + 1) + 20;
+  const granularitySeconds = settings.candleGranularitySeconds || 15;
+  const candles = await fetchCandlesForSymbol(token, app_id, symbol, neededCandles, granularitySeconds);
 
   const closes = candles.map((c) => c.close);
 
@@ -265,25 +288,71 @@ async function getSymbolSignal(token, app_id, symbol, settings) {
   return { symbol, signal: signalResult.signal, reason: signalResult.reason, details: signalResult.details, regime, adx };
 }
 
-// ---- DIGIT branch ----
-async function runDigitStrategy(token, app_id, settings) {
-  const STRATEGY_NAME = 'digit';
-  const symbol = settings.symbol;
+// ---- ACCUMULATOR branch ----
+// Unlike Rise/Fall, an accumulator has no fixed expiry, so this branch
+// splits into two paths each run: (1) one is already open -> poll it
+// (see pollActiveAccumulator), or (2) nothing is open -> look for a calm
+// enough symbol to enter one.
+async function runAccumulatorStrategy(token, app_id, settings) {
+  const STRATEGY_NAME = 'accumulator';
 
-  const tickAuth = await getOtpWebSocketUrl(token, app_id);
-  const prices = await connectAndGetTicks(tickAuth.wsUrl, symbol, (settings.digitLookback || 20) + 5);
-
-  const signalResult = digitStrategy.getSignal(prices, {
-    lookback: settings.digitLookback || 20
-  });
-  console.log('Digit signal check:', signalResult.reason);
-  if (signalResult.signal) {
-    await memory.appendLog(STRATEGY_NAME, `Signal: DIFFER from ${signalResult.barrier} - ${signalResult.reason}`, 'info');
+  const active = await memory.getActiveTrade(STRATEGY_NAME);
+  if (active && active.contractId) {
+    return await pollActiveAccumulator(token, app_id, settings, active);
   }
 
-  if (!signalResult.signal) {
-    await maybeSendEODReport(STRATEGY_NAME);
-    return respond({ message: 'No trade signal this run', ...signalResult });
+  const adxMaxEntry = settings.accumulatorAdxMaxEntry ?? accumulatorStrategy.DEFAULT_ADX_MAX_ENTRY;
+  const adxPeriod = settings.adxPeriod || 14;
+  const neededCandles = adxPeriod * 2 + 21; // calculateADX needs period*2+1 candles
+  const granularitySeconds = settings.candleGranularitySeconds || 15;
+
+  let symbol, adx, decisionReason;
+
+  if (settings.autoSelectSymbol) {
+    const watchlist = (settings.watchlist && settings.watchlist.length === 3) ? settings.watchlist : ['R_100', 'R_75', 'R_50'];
+
+    // Scan all watchlist symbols concurrently, same reasoning as
+    // rise_fall's scan: sequential risks blowing the 30s execution ceiling.
+    const scanResults = await Promise.all(
+      watchlist.map((sym) =>
+        fetchCandlesForSymbol(token, app_id, sym, neededCandles, granularitySeconds)
+          .then((candles) => ({ symbol: sym, ...accumulatorStrategy.getEntryDecision(candles, { adxPeriod, adxMaxEntry }) }))
+          .catch((err) => ({ symbol: sym, canEnter: false, reason: `Scan error: ${err.message}`, adx: null }))
+      )
+    );
+
+    const summary = scanResults.map((r) => `${r.symbol}: ${r.adx !== null && r.adx !== undefined ? `ADX ${r.adx.toFixed(1)}` : 'n/a'}${r.canEnter ? ' (OK)' : ''}`).join(' | ');
+    console.log('Accumulator watchlist scan:', summary);
+    await memory.appendLog(STRATEGY_NAME, `Scan: ${summary}`, 'info');
+
+    // Pick the CALMEST candidate that clears the gate - lowest ADX wins,
+    // the inverse of rise_fall's ranking (which wants the strongest
+    // trend confidence, not the calmest market).
+    const candidates = scanResults.filter((r) => r.canEnter);
+    if (candidates.length === 0) {
+      await maybeSendEODReport(STRATEGY_NAME);
+      return respond({ message: 'No calm-enough symbol this run (scanned watchlist)', scan: scanResults });
+    }
+    candidates.sort((a, b) => a.adx - b.adx);
+    const chosen = candidates[0];
+    symbol = chosen.symbol;
+    adx = chosen.adx;
+    decisionReason = chosen.reason;
+    console.log(`Chosen: ${symbol} - ${decisionReason}`);
+    await memory.appendLog(STRATEGY_NAME, `Chosen: ${symbol} - ${decisionReason}`, 'info');
+  } else {
+    symbol = settings.symbol;
+    const candles = await fetchCandlesForSymbol(token, app_id, symbol, neededCandles, granularitySeconds);
+    const decision = accumulatorStrategy.getEntryDecision(candles, { adxPeriod, adxMaxEntry });
+    adx = decision.adx;
+    decisionReason = decision.reason;
+
+    console.log('Entry check:', decisionReason);
+    if (!decision.canEnter) {
+      await maybeSendEODReport(STRATEGY_NAME);
+      return respond({ message: 'No entry this run', reason: decisionReason, adx });
+    }
+    await memory.appendLog(STRATEGY_NAME, `Entry: ${decisionReason}`, 'info');
   }
 
   const riskCheck = await handleRiskGate(STRATEGY_NAME);
@@ -293,53 +362,124 @@ async function runDigitStrategy(token, app_id, settings) {
   }
 
   const stake = await getScaledStake(STRATEGY_NAME, settings);
-  await memory.setActiveTrade(STRATEGY_NAME, {
-    direction: `DIFFER ${signalResult.barrier}`,
-    symbol,
-    stake,
-    placedAt: new Date().toISOString()
-  });
+  const growthRate = settings.accumulatorGrowthRate || 0.01;
+  const takeProfit = parseFloat((stake * (settings.accumulatorTakeProfitPct || 0.05)).toFixed(2));
+  const direction = `ACCU ${(growthRate * 100).toFixed(0)}%`;
+
+  // Persist a marker BEFORE sending the buy, same as rise_fall does -
+  // if this invocation dies between sending the buy and getting the
+  // ack back, reconcileOrphanedTrade's "no contract ID yet" grace-period
+  // path (see below) is what notices and eventually clears it, instead
+  // of an unrecoverable silent orphan on Deriv's side.
+  await memory.setActiveTrade(STRATEGY_NAME, { direction, symbol, stake, growthRate, takeProfit, placedAt: new Date().toISOString() });
 
   const tradeAuth = await getOtpWebSocketUrl(token, app_id);
-  const tradeResult = await placeContractAndWait(tradeAuth.wsUrl, {
-    contract_type: 'DIGITDIFF',
+  const buyResult = await placeAccumulatorAndReturn(tradeAuth.wsUrl, {
+    contract_type: 'ACCU',
     underlying_symbol: symbol,
-    duration: DIGIT_DURATION,
-    duration_unit: DIGIT_DURATION_UNIT,
-    barrier: String(signalResult.barrier),
+    growth_rate: growthRate,
+    limit_order: { take_profit: takeProfit },
     basis: 'stake',
     amount: stake,
     currency: 'USD'
-  }, stake, (contractId) => {
-    memory.setActiveTrade(STRATEGY_NAME, {
-      direction: `DIFFER ${signalResult.barrier}`,
-      symbol,
-      stake,
-      contractId,
-      placedAt: new Date().toISOString()
-    }).catch((e) => console.log('Failed to persist contract ID:', e.message));
-  });
+  }, stake);
 
-  if (tradeResult.error) {
-    console.log('Trade execution error:', tradeResult.error);
-    if (!tradeResult.contractPlaced) {
+  if (buyResult.error) {
+    console.log('Accumulator buy error:', buyResult.error);
+    if (buyResult.definitelyNotPlaced) {
+      // Deriv explicitly rejected the buy - nothing is open, safe to clear now.
       await memory.clearActiveTrade(STRATEGY_NAME);
     } else {
-      console.log('Contract was placed but settlement wait timed out - leaving active trade marker for reconciliation next run.');
+      // Timeout or WS error - genuinely unknown whether Deriv processed
+      // the buy. Leave the marker; reconcileOrphanedTrade's grace period
+      // will clear it if it turns out nothing was actually placed.
+      console.log('Buy outcome unknown (no explicit rejection) - leaving marker for reconciliation.');
     }
-    return respond({ message: 'Trade failed to execute', error: tradeResult.error });
+    return respond({ message: 'Trade failed to execute', error: buyResult.error });
   }
 
-  const updatedState = await recordAndLogTrade(STRATEGY_NAME, `DIFFER ${signalResult.barrier}`, symbol, stake, tradeResult);
-  await handlePostTradeRisk(STRATEGY_NAME, updatedState);
-  await maybeSendEODReport(STRATEGY_NAME);
+  await memory.setActiveTrade(STRATEGY_NAME, {
+    direction,
+    symbol,
+    stake,
+    growthRate,
+    takeProfit,
+    contractId: buyResult.contractId,
+    placedAt: new Date().toISOString()
+  });
+  await memory.appendLog(STRATEGY_NAME, `Opened ${direction} on ${symbol} - target take-profit $${takeProfit.toFixed(2)}`, 'info');
 
   return respond({
-    message: `Trade placed: DIFFER ${signalResult.barrier} - ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
-    signal: signalResult,
-    trade: tradeResult,
-    state: updatedState
+    message: `Accumulator opened: ${direction} on ${symbol}, target take-profit $${takeProfit.toFixed(2)}`,
+    symbol,
+    adx,
+    contractId: buyResult.contractId
   });
+}
+
+// Checks an open accumulator each run: if Deriv's native take-profit (or
+// a knockout) has already sold it, record the outcome. Otherwise, if
+// it's been open longer than the configured safety window, force a sell
+// rather than let it run indefinitely. Otherwise, leave it - this IS the
+// poll loop, there's no separate blocking "wait" step like Rise/Fall has.
+async function pollActiveAccumulator(token, app_id, settings, active) {
+  const STRATEGY_NAME = 'accumulator';
+  const ageMs = Date.now() - new Date(active.placedAt).getTime();
+  const maxHoldMs = (settings.accumulatorMaxHoldMinutes || 10) * 60 * 1000;
+
+  let status;
+  try {
+    const statusAuth = await getOtpWebSocketUrl(token, app_id);
+    status = await queryContractStatus(statusAuth.wsUrl, active.contractId);
+  } catch (err) {
+    // Mirrors reconcileOrphanedTrade's give-up behavior: a transient
+    // failure should just retry next run, but a permanent one (e.g. a
+    // bad contract ID) shouldn't leave the strategy stuck forever unable
+    // to open a new trade. Grace period is longer than the max-hold
+    // safety timer itself so a merely-slow API isn't mistaken for stuck.
+    if (ageMs > maxHoldMs + 10 * 60 * 1000) {
+      console.log(`WARNING: Could not check accumulator status for ${(ageMs / 60000).toFixed(1)}m (${err.message}) - clearing marker, outcome unknown.`);
+      await memory.appendLog(STRATEGY_NAME, `Could not verify accumulator status (${err.message}) - cleared, outcome unknown`, 'pause');
+      await memory.clearActiveTrade(STRATEGY_NAME);
+      return respond({ message: 'Accumulator status permanently unrecoverable, marker cleared', error: err.message });
+    }
+    console.log(`Could not check accumulator status: ${err.message} - will retry next run.`);
+    return respond({ message: 'Could not check accumulator status this run', error: err.message });
+  }
+
+  if (status.isSold) {
+    // A knockout on an accumulator loses the full stake, so profit <= 0
+    // reliably distinguishes it from a take-profit sale (profit > 0).
+    const exitReason = status.profit > 0 ? 'take_profit' : 'knockout';
+    const tradeResult = { won: status.profit > 0, profit: status.profit };
+    const updatedState = await recordAndLogTrade(STRATEGY_NAME, active.direction, active.symbol, active.stake, tradeResult, null, exitReason, Math.round(ageMs / 1000));
+    await handlePostTradeRisk(STRATEGY_NAME, updatedState);
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({
+      message: `Accumulator closed (${exitReason}): ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
+      trade: tradeResult,
+      state: updatedState
+    });
+  }
+
+  if (ageMs > maxHoldMs) {
+    console.log(`Accumulator on ${active.symbol} exceeded max hold time (${(ageMs / 60000).toFixed(1)}m) - forcing sell.`);
+    const sellResult = await forceSellAndWait(token, app_id, active.contractId);
+    if (sellResult.error) {
+      console.log('Force-sell failed:', sellResult.error, '- will retry next run.');
+      return respond({ message: 'Force-sell attempt failed, will retry next run', error: sellResult.error });
+    }
+    const updatedState = await recordAndLogTrade(STRATEGY_NAME, active.direction, active.symbol, active.stake, sellResult, null, 'timeout', Math.round(ageMs / 1000));
+    await handlePostTradeRisk(STRATEGY_NAME, updatedState);
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({
+      message: `Accumulator force-sold after max hold time: ${sellResult.won ? 'WON' : 'LOST'} $${Math.abs(sellResult.profit).toFixed(2)}`,
+      trade: sellResult,
+      state: updatedState
+    });
+  }
+
+  return respond({ message: `Accumulator still open on ${active.symbol} (${(ageMs / 1000).toFixed(0)}s)`, ageSeconds: Math.round(ageMs / 1000) });
 }
 
 // ---- Shared helpers ----
@@ -390,7 +530,7 @@ async function handleRiskGate(strategyName) {
   return riskCheck;
 }
 
-async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeResult, regime) {
+async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeResult, regime, exitReason, holdSeconds) {
   const updatedState = await memory.recordTrade(strategyName, {
     won: tradeResult.won,
     profitOrLoss: tradeResult.profit,
@@ -422,7 +562,9 @@ async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeRe
     stake,
     won: tradeResult.won,
     profit: tradeResult.profit,
-    regime: regime || null
+    regime: regime || null,
+    exitReason: exitReason || null,
+    holdSeconds: holdSeconds !== undefined ? holdSeconds : null
   });
   await telegram.alertTradeResult(strategyName, direction, symbol, stake, tradeResult.won, tradeResult.profit);
   return updatedState;
@@ -524,6 +666,16 @@ async function reconcileOrphanedTrade(token, app_id, strategyName) {
       await memory.appendLog(strategyName, `Orphaned trade cleared (no contract ID, outcome unknown)`, 'pause');
       await memory.clearActiveTrade(strategyName);
     }
+    return;
+  }
+
+  if (strategyName === 'accumulator') {
+    // Accumulators poll their own open contract as a normal part of
+    // every run (see pollActiveAccumulator), including exit-reason
+    // classification (take-profit vs knockout vs timeout) this generic
+    // path doesn't know how to do. Leave a contract-ID'd accumulator
+    // trade alone here entirely, so the two paths can't race to record
+    // the same settled trade - runAccumulatorStrategy always resolves it.
     return;
   }
 
@@ -720,63 +872,13 @@ function buildCandlesFromTicks(prices, times, granularitySeconds) {
     };
   });
 }
-// Used by the digit strategy - fetches the last N raw ticks by count.
-function connectAndGetTicks(wsUrl, symbol, count) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl);
-    let resolved = false;
 
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        try { ws.close(); } catch (e) {}
-        reject(new Error('Timeout waiting for tick history'));
-      }
-    }, 8000);
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        ticks_history: symbol,
-        style: 'ticks',
-        count: count,
-        end: 'latest'
-      }));
-    };
-
-    ws.onmessage = (event) => {
-      const res = JSON.parse(event.data);
-      if (res.error) {
-        clearTimeout(timeout);
-        resolved = true;
-        ws.close();
-        reject(new Error(res.error.message));
-        return;
-      }
-      if (res.msg_type === 'history') {
-        clearTimeout(timeout);
-        resolved = true;
-        ws.close();
-        const prices = (res.history && res.history.prices) || (res.data && res.data.history && res.data.history.prices) || [];
-        resolve(prices);
-      }
-    };
-
-    ws.onerror = (err) => {
-      clearTimeout(timeout);
-      if (!resolved) {
-        resolved = true;
-        reject(new Error('WS Error: ' + err.message));
-      }
-    };
-  });
-}
-
-// Generic contract placement - works for both rise/fall and digit
-// contracts since the shape of 'parameters' differs but the buy/wait
-// flow is identical. onBought(contractId) fires as soon as the buy
-// confirms, BEFORE waiting for settlement, so the caller can persist
-// the contract ID immediately - critical for recovering the real
-// outcome later if this function dies before settlement completes.
+// Generic contract placement - used by rise/fall, where the contract
+// settles within a few ticks so it's safe to block the invocation on it.
+// onBought(contractId) fires as soon as the buy confirms, BEFORE waiting
+// for settlement, so the caller can persist the contract ID immediately -
+// critical for recovering the real outcome later if this function dies
+// before settlement completes.
 function placeContractAndWait(wsUrl, parameters, stake, onBought) {
   return new Promise((resolve) => {
     const ws = new WebSocket(wsUrl);
@@ -857,4 +959,129 @@ function placeContractAndWait(wsUrl, parameters, stake, onBought) {
       }
     };
   });
+}
+
+// Buys an accumulator and resolves as soon as the buy confirms - does
+// NOT wait for settlement like placeContractAndWait does, because an
+// accumulator can stay open far longer than a single invocation. The
+// contract is checked on later runs instead, via queryContractStatus.
+// On failure, `definitelyNotPlaced` is only true for an explicit Deriv
+// rejection - a timeout or WS error leaves it false because whether the
+// buy actually went through is genuinely unknown in that case.
+function placeAccumulatorAndReturn(wsUrl, parameters, stake) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(wsUrl);
+    let resolved = false;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.close(); } catch (e) {}
+        resolve({ error: 'Timeout waiting for buy confirmation', definitelyNotPlaced: false });
+      }
+    }, 15000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        buy: 1,
+        price: stake,
+        parameters: parameters
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      const res = JSON.parse(event.data);
+
+      if (res.error) {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        resolve({ error: res.error.message, definitelyNotPlaced: true });
+        return;
+      }
+
+      if (res.msg_type === 'buy') {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        resolve({ contractId: res.buy.contract_id });
+      }
+    };
+
+    ws.onerror = (err) => {
+      clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        resolve({ error: 'WS Error: ' + err.message, definitelyNotPlaced: false });
+      }
+    };
+  });
+}
+
+// Sends a market sell (price: 0 = accept any price) for a still-open
+// contract and waits for Deriv's acknowledgement. Used only for the
+// accumulator max-hold-time safety timer - the actual settled profit is
+// fetched afterward via queryContractStatus, not parsed out of this ack.
+function sendSellRequest(wsUrl, contractId) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(wsUrl);
+    let resolved = false;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.close(); } catch (e) {}
+        resolve({ error: 'Timeout waiting for sell confirmation' });
+      }
+    }, 8000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ sell: contractId, price: 0 }));
+    };
+
+    ws.onmessage = (event) => {
+      const res = JSON.parse(event.data);
+
+      if (res.error) {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        resolve({ error: res.error.message });
+        return;
+      }
+
+      if (res.msg_type === 'sell') {
+        clearTimeout(timeout);
+        resolved = true;
+        ws.close();
+        resolve({ sold: true });
+      }
+    };
+
+    ws.onerror = (err) => {
+      clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        resolve({ error: 'WS Error: ' + err.message });
+      }
+    };
+  });
+}
+
+// Force-sells an accumulator that's exceeded the safety hold window, then
+// queries its final settled profit in a separate connection - each OTP
+// WebSocket URL is single-use, same reason every other WS action in this
+// file re-authenticates before opening a new connection.
+async function forceSellAndWait(token, app_id, contractId) {
+  const sellAuth = await getOtpWebSocketUrl(token, app_id);
+  const sellResult = await sendSellRequest(sellAuth.wsUrl, contractId);
+  if (sellResult.error) return { error: sellResult.error };
+
+  try {
+    const statusAuth = await getOtpWebSocketUrl(token, app_id);
+    const status = await queryContractStatus(statusAuth.wsUrl, contractId);
+    return { won: status.profit > 0, profit: status.profit };
+  } catch (err) {
+    return { error: err.message };
+  }
 }
