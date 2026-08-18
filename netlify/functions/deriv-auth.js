@@ -103,7 +103,16 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
   }
 
   if (!otpRes.ok) {
-    throw new Error('OTP fetch failed: ' + JSON.stringify(otpData.errors || otpData));
+    // Include which account was picked and the full accounts list Deriv
+    // returned moments earlier - an OTP 404 right after the accounts
+    // endpoint listed that same account_id means something about its
+    // shape (id format, account_type, wallet linkage) doesn't match what
+    // the OTP endpoint expects, and that's invisible without this context.
+    throw new Error(
+      `OTP fetch failed for account_id=${accountId} (account_type=${targetAccount.account_type}): ` +
+      JSON.stringify(otpData.errors || otpData) +
+      ' | accounts returned: ' + JSON.stringify(accounts)
+    );
   }
 
   const wsUrl = (otpData.data && otpData.data.url) || otpData.url;
