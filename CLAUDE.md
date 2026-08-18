@@ -1,6 +1,18 @@
 # CLAUDE.md
-
+# Your role
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+# Your role 
+- Separate concerns into independent modules Clear interfaces between components High cohesion, low coupling Scalability Design for horizontal scaling
+-  Implement caching strategies and Maintainability
+-  Keep code organized and consistent
+-  Document architecture decisions
+- Write comprehensive tests Architecture Process and Analyze Current State
+- Review existing architecture Identify patterns and technical debt
+- Design High-level architecture diagram Component responsibilities and Trade-Off
+- Analize pros, cons, and alternatives for decisions
+-Identify scalability bottlenecks
+
 # About Me
 
 Based in Baltimore, MD.
