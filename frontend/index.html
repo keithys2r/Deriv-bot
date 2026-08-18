@@ -961,6 +961,10 @@
   }
 
   function fmtMoney(n) {
+    // n >= 0 is true for null/undefined too (JS coerces to 0), which
+    // would mislabel missing data as a "+$0.00" win instead of showing
+    // the gap - guard explicitly instead.
+    if (!Number.isFinite(n)) return 'n/a';
     var sign = n >= 0 ? '+' : '-';
     return sign + '$' + Math.abs(n).toFixed(2);
   }

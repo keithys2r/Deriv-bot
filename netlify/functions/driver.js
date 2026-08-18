@@ -1286,14 +1286,34 @@ function placeContractAndWait(wsUrl, parameters, stake, onBought) {
           ws.close();
 
           // Guard against Deriv occasionally returning a settled contract
-          // without a usable profit field - better to flag it than let
-          // a bad value corrupt the running P&L total silently.
+          // without a usable profit field (seen in practice on fast 1-tick
+          // digit contracts - is_sold can flip true in a message that
+          // hasn't populated profit/sell_price yet). contract.status
+          // ('won'/'lost') is the authoritative outcome when present, since
+          // trusting profit > 0 alone means an unusable/zero profit reading
+          // gets misread as a loss even on an actual win. And a fallback of
+          // profit: 0 previously made a real loss silently vanish from P&L
+          // (displays as a false "+$0.00", undercounts dailyLoss/stop-loss
+          // tracking) - falling back to -stake on a confirmed loss instead
+          // is the safe direction to be wrong in, since it can't hide a
+          // loss the way defaulting to 0 did.
           const rawProfit = contract.profit;
-          const profit = Number.isFinite(rawProfit) ? rawProfit : (contract.sell_price - contract.buy_price);
+          const computedProfit = Number.isFinite(rawProfit) ? rawProfit : (contract.sell_price - contract.buy_price);
+          const won = contract.status ? contract.status === 'won' : computedProfit > 0;
+          let profit = computedProfit;
+          if (!Number.isFinite(profit)) {
+            if (contract.status) {
+              profit = won ? 0 : -stake;
+              console.log(`WARNING: contract ${contract.contract_id} settled with no usable profit field - falling back to ${won ? 'won: $0 (unknown payout)' : `lost: -$${stake}`} based on status='${contract.status}'.`);
+            } else {
+              profit = 0;
+              console.log(`WARNING: contract ${contract.contract_id} settled with no usable profit field AND no status - cannot determine real outcome, recording as $0. Check this trade manually.`);
+            }
+          }
 
           resolve({
-            won: profit > 0,
-            profit: Number.isFinite(profit) ? profit : 0,
+            won,
+            profit,
             contractId: contract.contract_id,
             buyPrice: contract.buy_price,
             sellPrice: contract.sell_price
