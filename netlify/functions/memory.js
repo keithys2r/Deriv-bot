@@ -220,7 +220,7 @@ const SETTINGS_KEY = 'bot_settings';
 
 function defaultSettings() {
   return {
-    activeStrategy: 'rise_fall', // 'rise_fall' | 'accumulator' - the switch
+    activeStrategy: 'rise_fall', // 'rise_fall' | 'accumulator' | 'even_odd' - the switch
     symbol: 'R_100',
     autoSelectSymbol: false,
     watchlist: ['R_100', 'R_75', 'R_50'],
@@ -245,6 +245,8 @@ function defaultSettings() {
     accumulatorTakeProfitPct: 0.05, // cash out once profit reaches 5% of stake
     accumulatorAdxMaxEntry: 20,    // only enter when ADX is at/below this (calm/ranging market)
     accumulatorMaxHoldMinutes: 10, // safety backstop: force-sell if still open this long
+    evenOddLookback: 20,       // how many recent ticks the "fade the hot parity" heuristic looks at
+    evenOddDurationTicks: 1,   // contract duration in ticks
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
     weeklyProfitGoal: 100,

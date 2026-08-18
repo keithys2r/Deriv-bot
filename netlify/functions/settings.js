@@ -63,7 +63,7 @@ exports.handler = async function (event) {
           return respond({ error: `Watchlist needs exactly 3 valid symbols, got ${validWatchlist.length}.` });
         }
       }
-      if (body.activeStrategy === 'rise_fall' || body.activeStrategy === 'accumulator') {
+      if (body.activeStrategy === 'rise_fall' || body.activeStrategy === 'accumulator' || body.activeStrategy === 'even_odd') {
         update.activeStrategy = body.activeStrategy;
       }
 
@@ -129,6 +129,13 @@ exports.handler = async function (event) {
       }
       if (body.accumulatorMaxHoldMinutes !== undefined && body.accumulatorMaxHoldMinutes >= 1 && body.accumulatorMaxHoldMinutes <= 60) {
         update.accumulatorMaxHoldMinutes = parseInt(body.accumulatorMaxHoldMinutes);
+      }
+
+      if (body.evenOddLookback && body.evenOddLookback >= 5 && body.evenOddLookback <= 100) {
+        update.evenOddLookback = parseInt(body.evenOddLookback);
+      }
+      if (body.evenOddDurationTicks && body.evenOddDurationTicks >= 1 && body.evenOddDurationTicks <= 10) {
+        update.evenOddDurationTicks = parseInt(body.evenOddDurationTicks);
       }
 
       const saved = await memory.saveSettings(update);
