@@ -38,9 +38,21 @@ function validateProfitGoal(rawGoal) {
   return { ok: true, value: goal };
 }
 
+// Shared with the telegram supervisor (supervisor-core.js), so a strategy
+// switch it proposes is held to the same allowlist as a dashboard/Telegram
+// change instead of a third copy of this rule drifting apart.
+function validateStrategy(rawStrategy) {
+  if (!VALID_STRATEGIES.includes(rawStrategy)) {
+    return { ok: false, error: `Strategy must be one of: ${VALID_STRATEGIES.join(', ')}.` };
+  }
+  return { ok: true, value: rawStrategy };
+}
+
 module.exports.validateStakeAmount = validateStakeAmount;
 module.exports.validateProfitGoal = validateProfitGoal;
+module.exports.validateStrategy = validateStrategy;
 module.exports.ALLOWED_SYMBOLS = ALLOWED_SYMBOLS;
+module.exports.VALID_STRATEGIES = VALID_STRATEGIES;
 
 exports.handler = async function (event) {
   if (event.httpMethod === 'OPTIONS') {
