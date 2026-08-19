@@ -4,14 +4,25 @@
 // Used by driver.js and balance.js so this logic lives in one place.
 
 const API_BASE = 'https://api.derivws.com';
-const REST_TIMEOUT_MS = 6000; // each REST call gets its own hard timeout,
+const REST_TIMEOUT_MS = 4000; // each REST call gets its own hard timeout,
                                // since fetch() has no built-in one and a
                                // hang here could push total execution
                                // past Netlify's 30s scheduled function limit
-const RETRY_DELAYS_MS = [500, 1500]; // retries a timeout/network failure twice
-                                      // before giving up - a genuine Deriv
-                                      // rejection (non-2xx with a real body)
-                                      // is NOT retried, it fails immediately
+const RETRY_DELAYS_MS = [400]; // retries a timeout/network failure once
+                                // before giving up - a genuine Deriv
+                                // rejection (non-2xx with a real body)
+                                // is NOT retried, it fails immediately.
+                                // Kept to a single retry (not two) because
+                                // the empty-accounts loop below wraps this
+                                // in its OWN retry loop - nesting two
+                                // multi-attempt retries compounds fast
+                                // (previously ~84s worst case for one
+                                // getOtpWebSocketUrl call, well past the
+                                // 30s budget a single call should ever use).
+const EMPTY_ACCOUNTS_RETRY_DELAY_MS = 300;
+const EMPTY_ACCOUNTS_MAX_ATTEMPTS = 2; // fixed, independent of RETRY_DELAYS_MS -
+                                        // was tied to it before, which is what let
+                                        // the two retry loops multiply together
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,7 +69,7 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
   // own short retry here rather than failing the whole run on one flaky read.
   let accounts;
   let lastEmptyAccountsData;
-  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+  for (let attempt = 0; attempt < EMPTY_ACCOUNTS_MAX_ATTEMPTS; attempt++) {
     const accountsRes = await fetchWithRetry(`${API_BASE}/trading/v1/options/accounts`, {
       headers: {
         'Deriv-App-ID': app_id,
@@ -83,9 +94,9 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
     if (accounts.length) break;
 
     lastEmptyAccountsData = accountsData;
-    if (attempt < RETRY_DELAYS_MS.length) {
-      console.log(`Deriv returned an empty accounts list (attempt ${attempt + 1}), retrying in ${RETRY_DELAYS_MS[attempt]}ms...`);
-      await sleep(RETRY_DELAYS_MS[attempt]);
+    if (attempt < EMPTY_ACCOUNTS_MAX_ATTEMPTS - 1) {
+      console.log(`Deriv returned an empty accounts list (attempt ${attempt + 1}), retrying in ${EMPTY_ACCOUNTS_RETRY_DELAY_MS}ms...`);
+      await sleep(EMPTY_ACCOUNTS_RETRY_DELAY_MS);
     }
   }
 
@@ -93,9 +104,19 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
     throw new Error('No accounts returned from Deriv: ' + JSON.stringify(lastEmptyAccountsData));
   }
 
-  const targetAccount = effectivePreferDemo
-    ? (accounts.find((a) => a.account_type === 'demo') || accounts[0])
-    : (accounts.find((a) => a.account_type === 'real') || accounts[0]);
+  // On the demo branch, do NOT fall back to accounts[0] - that could be a
+  // real-money account, silently defeating the whole point of this gate.
+  // The real branch is already a deliberate, gated opt-in (ALLOW_LIVE_TRADING),
+  // so falling back there is an acceptable "just use whatever's available".
+  let targetAccount;
+  if (effectivePreferDemo) {
+    targetAccount = accounts.find((a) => a.account_type === 'demo');
+    if (!targetAccount) {
+      throw new Error('No demo account found on this token, and live trading is not allowed (ALLOW_LIVE_TRADING is not set) - refusing to silently fall back to a non-demo account: ' + JSON.stringify(accounts));
+    }
+  } else {
+    targetAccount = accounts.find((a) => a.account_type === 'real') || accounts[0];
+  }
 
   const accountId = targetAccount.account_id;
   if (!accountId) {

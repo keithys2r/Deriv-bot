@@ -118,6 +118,7 @@ netlify deploy --prod     # deploy (deploys are otherwise handled by Netlify's g
 - `ALLOW_LIVE_TRADING` — must be the exact string `'true'` to allow real-money account selection; unset or anything else forces demo, enforced inside `deriv-auth.js` itself (see above), not by trusting every call site.
 - `NETLIFY_SITE_ID`, `NETLIFY_AUTH_TOKEN` — needed by `memory.js` so scheduled functions can reach Netlify Blobs (they don't always get the automatic Blobs context that request-triggered functions do).
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — optional; alerts are skipped if unset.
+- `DASHBOARD_SECRET` — required for `control.js`/`settings.js` to accept requests (see `auth.js`); fails closed (500) if unset, rather than silently allowing unauthenticated access. The frontend prompts for the same value once and remembers it in `localStorage`.
 
 ### Frontend
 `frontend/index.html` is a single self-contained static file (inline CSS/JS, no framework, no build step) that polls the on-demand functions (`status`, `balance`, `stats`) and posts to `control`/`settings`. Deployed as-is via `netlify.toml`'s `publish = "frontend"`.

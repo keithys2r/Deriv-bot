@@ -3,6 +3,7 @@
 // Sets the manualPause flag that risk.js checks before every trade.
 
 const memory = require('./memory');
+const { checkDashboardSecret } = require('./auth');
 
 exports.handler = async function (event) {
   // Browsers send an OPTIONS preflight before a POST with a JSON body
@@ -12,8 +13,17 @@ exports.handler = async function (event) {
       headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type'
+        'Access-Control-Allow-Headers': 'Content-Type, X-Dashboard-Secret'
       }
+    };
+  }
+
+  const auth = checkDashboardSecret(event);
+  if (!auth.ok) {
+    return {
+      statusCode: auth.statusCode,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ error: auth.error })
     };
   }
 
