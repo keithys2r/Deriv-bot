@@ -24,6 +24,14 @@ const EMPTY_ACCOUNTS_MAX_ATTEMPTS = 2; // fixed, independent of RETRY_DELAYS_MS 
                                         // was tied to it before, which is what let
                                         // the two retry loops multiply together
 
+const OTP_NOT_FOUND_RETRY_DELAY_MS = 400;
+const OTP_NOT_FOUND_MAX_ATTEMPTS = 3; // Deriv's account/wallet routing has been observed
+                                       // in practice to lag briefly - an OTP 404
+                                       // "AccountNotFound" for an account_id the accounts
+                                       // endpoint JUST listed moments earlier is that lag,
+                                       // not a genuinely bad account (same category of
+                                       // transient hiccup as the empty-accounts case above).
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -135,21 +143,32 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
     throw new Error('Could not determine account ID from: ' + JSON.stringify(targetAccount));
   }
 
-  const otpRes = await fetchWithRetry(`${API_BASE}/trading/v1/options/accounts/${accountId}/otp`, {
-    method: 'POST',
-    headers: {
-      'Deriv-App-ID': app_id,
-      'Authorization': `Bearer ${token}`
+  let otpRes, otpRawText, otpData;
+  for (let attempt = 0; attempt < OTP_NOT_FOUND_MAX_ATTEMPTS; attempt++) {
+    otpRes = await fetchWithRetry(`${API_BASE}/trading/v1/options/accounts/${accountId}/otp`, {
+      method: 'POST',
+      headers: {
+        'Deriv-App-ID': app_id,
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    otpRawText = await otpRes.text();
+    try {
+      otpData = JSON.parse(otpRawText);
+    } catch (e) {
+      throw new Error(`OTP endpoint returned non-JSON (status ${otpRes.status}): ${otpRawText.slice(0, 200)}`);
     }
-  });
 
-  const otpRawText = await otpRes.text();
+    if (otpRes.ok) break;
 
-  let otpData;
-  try {
-    otpData = JSON.parse(otpRawText);
-  } catch (e) {
-    throw new Error(`OTP endpoint returned non-JSON (status ${otpRes.status}): ${otpRawText.slice(0, 200)}`);
+    const isAccountNotFound = otpRes.status === 404 && Array.isArray(otpData.errors) && otpData.errors.some((e) => e.code === 'AccountNotFound');
+    if (isAccountNotFound && attempt < OTP_NOT_FOUND_MAX_ATTEMPTS - 1) {
+      console.log(`OTP fetch got AccountNotFound for account_id=${accountId}, which the accounts endpoint just listed as valid (attempt ${attempt + 1}) - likely transient Deriv-side routing lag, retrying in ${OTP_NOT_FOUND_RETRY_DELAY_MS}ms...`);
+      await sleep(OTP_NOT_FOUND_RETRY_DELAY_MS);
+      continue;
+    }
+    break; // genuine failure (not AccountNotFound, or retries exhausted)
   }
 
   if (!otpRes.ok) {
