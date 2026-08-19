@@ -48,7 +48,6 @@ module.exports = {
     const trending = makeTrendingCandles(60, 100, 0.5);
     const closes = trending.map((c) => c.close);
     const result = strategy.getSignal(closes, {
-      useAdaptiveRegime: true,
       regime: 'trend',
       adx: 90,
       adxFloorTrend: 25,
@@ -65,7 +64,6 @@ module.exports = {
     const trending = makeTrendingCandles(60, 100, 0.5);
     const closes = trending.map((c) => c.close);
     const result = strategy.getSignal(closes, {
-      useAdaptiveRegime: true,
       regime: 'trend',
       adx: 10,
       adxFloorTrend: 25,
@@ -87,10 +85,8 @@ module.exports = {
     const closes = flatCloses.concat(dropCloses);
 
     const result = strategy.getSignal(closes, {
-      useAdaptiveRegime: true,
       regime: 'range',
       adx: 15,
-      biasEnabled: false,
       emaFastPeriod: 9,
       emaSlowPeriod: 21,
       rsiPeriod: 14,
@@ -113,10 +109,8 @@ module.exports = {
     const crashCloses = [];
     for (let i = 1; i <= 8; i++) crashCloses.push(100 - i * 5); // deep, fast drop
     const rangeResult = strategy.getSignal(flatCloses.concat(crashCloses), {
-      useAdaptiveRegime: true,
       regime: 'range',
       adx: 15,
-      biasEnabled: false,
       emaFastPeriod: 9,
       emaSlowPeriod: 21,
       rsiPeriod: 14,
@@ -126,7 +120,6 @@ module.exports = {
 
     const trending = makeTrendingCandles(60, 100, 0.5);
     const barelyTrendResult = strategy.getSignal(trending.map((c) => c.close), {
-      useAdaptiveRegime: true,
       regime: 'trend',
       adx: 26, // barely above the floor
       adxFloorTrend: 25,

@@ -6,21 +6,15 @@
 // remember state between runs) lives in memory.js/driver.js instead;
 // this file just needs to be TOLD the current regime and ADX value.
 //
-// Two modes:
-// - Classic (useAdaptiveRegime: false): fresh EMA crossover + optional
-//   RSI confirmation. The original logic - fires only on the exact
-//   candle where a crossover happens.
-// - Adaptive (useAdaptiveRegime: true, default): switches behavior
-//   based on market regime -
-//     TREND regime -> continuous EMA direction (which side EMA is on
-//       right now, not just the crossing moment), gated by an ADX
-//       floor so it won't trade a "trend" that's actually too weak.
-//     RANGE regime -> RSI mean-reversion (oversold/overbought), with
-//       an optional bias filter that blocks a reversal trade against
-//       a clear recent directional push.
-// Ported from the entry logic of an earlier version of this bot, at
-// the user's request, after noticing crossover-only was too rare a
-// trigger to produce meaningful trade volume.
+// One mode, regime-based:
+//   TREND regime -> continuous EMA direction (which side EMA is on
+//     right now, not just the crossing moment), gated by an ADX floor
+//     so it won't trade a "trend" that's actually too weak.
+//   RANGE regime -> RSI mean-reversion (oversold/overbought).
+// A prior "classic" fresh-crossover mode and a RANGE-mode bias filter
+// existed here too, but were removed as unneeded complexity for a
+// contract that only needs to survive 3-5 ticks - recoverable from git
+// history if ever wanted back.
 
 const STRATEGY_NAME = 'rise_fall';
 
@@ -113,17 +107,6 @@ function clamp01(n) {
   return Math.max(0, Math.min(1, n));
 }
 
-// Simple price-direction bias over a lookback window - used to block
-// range-mode mean-reversion trades against a strong recent push.
-function calculateBias(closes, period, thresholdPct) {
-  if (!Array.isArray(closes) || closes.length < period + 1) return null;
-  const recent = closes.slice(-period);
-  const change = ((recent[recent.length - 1] - recent[0]) / recent[0]) * 100;
-  if (change > thresholdPct) return 'UP';
-  if (change < -thresholdPct) return 'DOWN';
-  return 'FLAT';
-}
-
 function getSignal(closes, params) {
   params = params || {};
   const emaFastPeriod = params.emaFastPeriod || EMA_FAST_PERIOD;
@@ -131,8 +114,6 @@ function getSignal(closes, params) {
   const rsiPeriod = params.rsiPeriod || RSI_PERIOD;
   const rsiOverbought = params.rsiOverbought || RSI_OVERBOUGHT;
   const rsiOversold = params.rsiOversold || RSI_OVERSOLD;
-  const requireRsiConfirmation = params.requireRsiConfirmation !== false;
-  const useAdaptiveRegime = params.useAdaptiveRegime !== false; // default ON
 
   const minCandles = Math.max(emaSlowPeriod, rsiPeriod + 1) + 1;
 
@@ -149,11 +130,8 @@ function getSignal(closes, params) {
   const rsi = calculateRSI(closes, rsiPeriod);
 
   const lastIndex = closes.length - 1;
-  const prevIndex = lastIndex - 1;
   const fastNow = emaFast[lastIndex];
   const slowNow = emaSlow[lastIndex];
-  const fastPrev = emaFast[prevIndex];
-  const slowPrev = emaSlow[prevIndex];
   const rsiNow = rsi[lastIndex];
 
   if (fastNow === null || slowNow === null || rsiNow === null) {
@@ -162,38 +140,6 @@ function getSignal(closes, params) {
 
   const details = { emaFast: fastNow, emaSlow: slowNow, rsi: rsiNow };
 
-  // ---- CLASSIC MODE: fresh crossover only ----
-  if (!useAdaptiveRegime) {
-    const bullishCross = fastPrev <= slowPrev && fastNow > slowNow;
-    if (bullishCross && (!requireRsiConfirmation || rsiNow < rsiOverbought)) {
-      return {
-        signal: 'CALL',
-        reason: requireRsiConfirmation
-          ? `EMA${emaFastPeriod} crossed above EMA${emaSlowPeriod}, RSI ${rsiNow.toFixed(1)} (not overbought)`
-          : `EMA${emaFastPeriod} crossed above EMA${emaSlowPeriod} (RSI confirmation off, RSI ${rsiNow.toFixed(1)})`,
-        details
-      };
-    }
-    const bearishCross = fastPrev >= slowPrev && fastNow < slowNow;
-    if (bearishCross && (!requireRsiConfirmation || rsiNow > rsiOversold)) {
-      return {
-        signal: 'PUT',
-        reason: requireRsiConfirmation
-          ? `EMA${emaFastPeriod} crossed below EMA${emaSlowPeriod}, RSI ${rsiNow.toFixed(1)} (not oversold)`
-          : `EMA${emaFastPeriod} crossed below EMA${emaSlowPeriod} (RSI confirmation off, RSI ${rsiNow.toFixed(1)})`,
-        details
-      };
-    }
-    return {
-      signal: null,
-      reason: requireRsiConfirmation
-        ? 'No fresh crossover with RSI confirmation this candle'
-        : 'No fresh EMA crossover this candle',
-      details
-    };
-  }
-
-  // ---- ADAPTIVE MODE: regime-based dual signal ----
   const regime = params.regime || 'range'; // computed + persisted externally by memory.js
   const adx = params.adx;
   details.regime = regime;
@@ -245,30 +191,6 @@ function getSignal(closes, params) {
       };
     }
 
-    if (params.biasEnabled) {
-      const biasPeriod = params.biasPeriod || 20;
-      const biasThresholdPct = params.biasThresholdPct || 0.05;
-      const bias = calculateBias(closes, biasPeriod, biasThresholdPct);
-      details.bias = bias;
-
-      if (bias && bias !== 'FLAT') {
-        if (sig === 'CALL' && bias === 'DOWN') {
-          return {
-            signal: null,
-            reason: `RANGE regime: RSI ${rsiNow.toFixed(1)} says CALL but recent bias is DOWN - blocked`,
-            details
-          };
-        }
-        if (sig === 'PUT' && bias === 'UP') {
-          return {
-            signal: null,
-            reason: `RANGE regime: RSI ${rsiNow.toFixed(1)} says PUT but recent bias is UP - blocked`,
-            details
-          };
-        }
-      }
-    }
-
     // How far RSI has pushed past the oversold/overbought threshold,
     // scaled 0-1 - the RANGE-side equivalent of the TREND branch's ADX
     // scaling above, so the two are comparable on the same footing
@@ -292,7 +214,6 @@ module.exports = {
   calculateEMA,
   calculateRSI,
   calculateADX,
-  calculateBias,
   EMA_FAST_PERIOD,
   EMA_SLOW_PERIOD,
   RSI_PERIOD,

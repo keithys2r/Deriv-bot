@@ -353,40 +353,36 @@ async function getSymbolSignal(token, app_id, symbol, settings) {
 async function computeRiseFallSignal(symbol, candles, settings) {
   const closes = candles.map((c) => c.close);
 
-  let regime = 'range';
-  let adx = null;
-  if (settings.useAdaptiveRegime !== false) {
-    adx = riseFallStrategy.calculateADX(candles, settings.adxPeriod || 14);
-    const regimeResult = await memory.updateRegimeForSymbol(
-      symbol,
-      adx,
-      settings.adxTrendThreshold || 35,
-      settings.adxRangeThreshold || 25,
-      TREND_CONFIRM_CANDLES,
-      RANGE_CONFIRM_CANDLES
-    );
-    regime = regimeResult.regime;
-    if (regimeResult.switched) {
-      await memory.appendLog('rise_fall', `[${symbol}] Regime switched to ${regime.toUpperCase()} (ADX ${adx !== null ? adx.toFixed(1) : '—'})`, 'pause');
-    }
+  const adx = riseFallStrategy.calculateADX(candles, settings.adxPeriod || 14);
+  const regimeResult = await memory.updateRegimeForSymbol(
+    symbol,
+    adx,
+    settings.adxTrendThreshold || 35,
+    settings.adxRangeThreshold || 25,
+    TREND_CONFIRM_CANDLES,
+    RANGE_CONFIRM_CANDLES
+  );
+  const regime = regimeResult.regime;
+  if (regimeResult.switched) {
+    await memory.appendLog('rise_fall', `[${symbol}] Regime switched to ${regime.toUpperCase()} (ADX ${adx !== null ? adx.toFixed(1) : '—'})`, 'pause');
+  }
 
-    // Cap correlated re-entry: this same regime read already produced a
-    // trade on this symbol, and the regime hasn't changed since - refuse
-    // to bet the identical read again every ~60s run (this is what
-    // turned one questionable trend call into dozens of correlated
-    // trades clustered in the same hour). Waits for either a genuine
-    // regime switch (see updateRegimeForSymbol) or a fresh episode.
-    if (regimeResult.tradedThisEpisode) {
-      return {
-        symbol,
-        signal: null,
-        reason: `[${symbol}] Already traded this ${regime.toUpperCase()} episode - waiting for a fresh regime switch`,
-        details: { regime, adx },
-        regime,
-        adx,
-        confidence: undefined
-      };
-    }
+  // Cap correlated re-entry: this same regime read already produced a
+  // trade on this symbol, and the regime hasn't changed since - refuse
+  // to bet the identical read again every ~60s run (this is what
+  // turned one questionable trend call into dozens of correlated
+  // trades clustered in the same hour). Waits for either a genuine
+  // regime switch (see updateRegimeForSymbol) or a fresh episode.
+  if (regimeResult.tradedThisEpisode) {
+    return {
+      symbol,
+      signal: null,
+      reason: `[${symbol}] Already traded this ${regime.toUpperCase()} episode - waiting for a fresh regime switch`,
+      details: { regime, adx },
+      regime,
+      adx,
+      confidence: undefined
+    };
   }
 
   const signalResult = riseFallStrategy.getSignal(closes, {
@@ -395,15 +391,10 @@ async function computeRiseFallSignal(symbol, candles, settings) {
     rsiPeriod: settings.rsiPeriod,
     rsiOverbought: settings.rsiOverbought,
     rsiOversold: settings.rsiOversold,
-    requireRsiConfirmation: settings.requireRsiConfirmation,
-    useAdaptiveRegime: settings.useAdaptiveRegime,
     regime,
     adx,
     adxFloorTrend: settings.adxFloorTrend,
-    adxFloorRange: settings.adxFloorRange,
-    biasEnabled: settings.biasEnabled,
-    biasPeriod: settings.biasPeriod,
-    biasThresholdPct: settings.biasThresholdPct
+    adxFloorRange: settings.adxFloorRange
   });
 
   return { symbol, signal: signalResult.signal, reason: signalResult.reason, details: signalResult.details, regime, adx, confidence: signalResult.details ? signalResult.details.confidence : undefined };
