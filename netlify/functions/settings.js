@@ -28,7 +28,18 @@ function validateStakeAmount(rawStake, dailyStopLoss) {
   return { ok: true, value: stake };
 }
 
+// Shared with telegram-webhook.js, so /dailygoal and /weeklygoal are
+// held to the same rule (just "greater than 0") as a dashboard edit.
+function validateProfitGoal(rawGoal) {
+  const goal = parseFloat(rawGoal);
+  if (!Number.isFinite(goal) || goal <= 0) {
+    return { ok: false, error: 'Goal must be greater than 0' };
+  }
+  return { ok: true, value: goal };
+}
+
 module.exports.validateStakeAmount = validateStakeAmount;
+module.exports.validateProfitGoal = validateProfitGoal;
 module.exports.ALLOWED_SYMBOLS = ALLOWED_SYMBOLS;
 
 exports.handler = async function (event) {
@@ -70,11 +81,13 @@ exports.handler = async function (event) {
 
       // Risk rules - validate ranges before anything else, since stake
       // validation below depends on the resulting dailyStopLoss.
-      if (body.dailyProfitGoal && body.dailyProfitGoal > 0) {
-        update.dailyProfitGoal = parseFloat(body.dailyProfitGoal);
+      if (body.dailyProfitGoal) {
+        const validated = validateProfitGoal(body.dailyProfitGoal);
+        if (validated.ok) update.dailyProfitGoal = validated.value;
       }
-      if (body.weeklyProfitGoal && body.weeklyProfitGoal > 0) {
-        update.weeklyProfitGoal = parseFloat(body.weeklyProfitGoal);
+      if (body.weeklyProfitGoal) {
+        const validated = validateProfitGoal(body.weeklyProfitGoal);
+        if (validated.ok) update.weeklyProfitGoal = validated.value;
       }
       if (body.dailyStopLoss && body.dailyStopLoss > 0) {
         update.dailyStopLoss = parseFloat(body.dailyStopLoss);
