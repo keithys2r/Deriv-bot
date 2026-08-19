@@ -35,10 +35,25 @@ exports.handler = async function (event) {
   try {
     const update = JSON.parse(event.body || '{}');
     const message = update.message;
+    const callbackQuery = update.callback_query;
 
-    // Not a text message (e.g. an edited_message, a sticker, a
-    // callback_query) - nothing to do, but still 200 so Telegram
-    // doesn't keep retrying delivery.
+    // A tapped inline-keyboard button arrives as callback_query, not a
+    // text message - handle it separately (still gated by the same
+    // chat-id check below).
+    if (callbackQuery && callbackQuery.message && callbackQuery.message.chat) {
+      if (!TELEGRAM_CHAT_ID || String(callbackQuery.message.chat.id) !== String(TELEGRAM_CHAT_ID)) {
+        console.log(`Ignored Telegram callback from unrecognized chat ${callbackQuery.message.chat.id}`);
+        return { statusCode: 200, body: 'ok' };
+      }
+      if (!TELEGRAM_TOKEN) {
+        return { statusCode: 200, body: 'ok' };
+      }
+      await handleCallbackQuery(callbackQuery);
+      return { statusCode: 200, body: 'ok' };
+    }
+
+    // Not a text message (e.g. an edited_message, a sticker) - nothing
+    // to do, but still 200 so Telegram doesn't keep retrying delivery.
     if (!message || !message.text || !message.chat) {
       return { statusCode: 200, body: 'ok' };
     }
@@ -128,20 +143,50 @@ async function handleStatus() {
 }
 
 const VALID_STRATEGIES = ['accumulator', 'digit_differ', 'hybrid'];
+const STRATEGY_LABELS = { accumulator: 'Accumulator', digit_differ: 'Digit Differ', hybrid: 'Hybrid' };
+
+// Shared by the typed "/strategy <name>" path and the button-tap path
+// below, so there's one source of truth for the actual switch.
+async function switchStrategy(strategyName) {
+  if (!VALID_STRATEGIES.includes(strategyName)) {
+    return { ok: false, error: `Strategy must be one of: ${VALID_STRATEGIES.join(', ')}.` };
+  }
+  const saved = await memory.saveSettings({ activeStrategy: strategyName });
+  await memory.appendLog(saved.activeStrategy, 'Strategy switched via Telegram', 'info');
+  return { ok: true };
+}
 
 async function handleStrategy(arg) {
   if (!arg) {
     const settings = await memory.loadSettings();
-    return telegram.sendMessage(`Current strategy: <b>${settings.activeStrategy || 'accumulator'}</b>\nSend /strategy with one of: ${VALID_STRATEGIES.join(', ')}.`);
+    const buttons = VALID_STRATEGIES.map((name) => ([{ text: STRATEGY_LABELS[name], callback_data: `strategy:${name}` }]));
+    return telegram.sendMessage(
+      `Current strategy: <b>${settings.activeStrategy || 'accumulator'}</b>\nTap to switch:`,
+      { inline_keyboard: buttons }
+    );
   }
 
   const strategyName = arg.toLowerCase();
-  if (!VALID_STRATEGIES.includes(strategyName)) {
-    return telegram.sendMessage(`Strategy must be one of: ${VALID_STRATEGIES.join(', ')}.`);
+  const result = await switchStrategy(strategyName);
+  if (!result.ok) {
+    return telegram.sendMessage(`❌ ${result.error}`);
+  }
+  return telegram.sendMessage(`✅ Strategy set to <b>${strategyName}</b> - takes effect on the next scheduled run.`);
+}
+
+async function handleCallbackQuery(cq) {
+  const data = cq.data || '';
+  if (!data.startsWith('strategy:')) {
+    return telegram.answerCallbackQuery(cq.id, '');
   }
 
-  const saved = await memory.saveSettings({ activeStrategy: strategyName });
-  await memory.appendLog(saved.activeStrategy, 'Strategy switched via Telegram', 'info');
+  const strategyName = data.slice('strategy:'.length);
+  const result = await switchStrategy(strategyName);
+  if (!result.ok) {
+    return telegram.answerCallbackQuery(cq.id, `❌ ${result.error}`);
+  }
+
+  await telegram.answerCallbackQuery(cq.id, `✅ Switched to ${STRATEGY_LABELS[strategyName] || strategyName}`);
   return telegram.sendMessage(`✅ Strategy set to <b>${strategyName}</b> - takes effect on the next scheduled run.`);
 }
 
@@ -168,7 +213,7 @@ async function handleHelp() {
     '/start - resume trading\n' +
     '/stop - pause trading\n' +
     '/status - current status, P&amp;L, active trade\n' +
-    '/strategy [accumulator|digit_differ|hybrid] - view or switch strategy\n' +
+    '/strategy [accumulator|digit_differ|hybrid] - view/switch strategy, or send with no argument for tappable buttons\n' +
     '/stake [amount] - view or change stake\n' +
     '/help - this message'
   );
