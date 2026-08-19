@@ -2,8 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BandzzBot — Rise/Fall</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>BandzzBot</title>
+<meta name="theme-color" content="#0B0E11">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BandzzBot">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" href="/icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1213,6 +1220,18 @@
   pollBalance();
   setInterval(poll, 5000); // primary "is it alive" signal, stays fast
   setInterval(pollBalance, 60000); // was 20000 - eases sustained Deriv connection load
+
+  // Registers the PWA service worker (sw.js) so the dashboard is
+  // installable to a phone home screen. No-ops silently if unsupported
+  // (e.g. an older browser) - this is purely additive, nothing here
+  // depends on the service worker existing.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.log('Service worker registration failed:', err.message);
+      });
+    });
+  }
 </script>
 
 </body>
