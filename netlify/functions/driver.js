@@ -804,7 +804,13 @@ async function getScaledStake(strategyName, settings, confidence) {
   const combinedFactor = weeklyFactor * losingStreakFactor * confidenceFactor;
 
   if (combinedFactor < 1.0) {
-    const scaledStake = Math.max(0.35, baseStake * combinedFactor);
+    // Deriv rejects a price with more than 2 decimal places - the three
+    // factors above multiply to an essentially-never-clean float (unlike
+    // the old single weekly-only factor, which was always a round
+    // fraction), so this MUST be rounded before being sent as a trade
+    // price, not just for display. Round after the $0.35 floor so the
+    // floor itself can't get nudged back under by rounding.
+    const scaledStake = Math.round(Math.max(0.35, baseStake * combinedFactor) * 100) / 100;
     console.log(`Stake scaled: weekly=${weeklyFactor.toFixed(2)} (${weeklyProfitGoal ? (weeklyNet / weeklyProfitGoal * 100).toFixed(0) + '%' : 'n/a'}) losingStreak=${losingStreakFactor.toFixed(2)} (${state.consecutiveLosses || 0} losses) confidence=${confidenceFactor.toFixed(2)} -> $${baseStake} to $${scaledStake.toFixed(2)}`);
     return scaledStake;
   }
