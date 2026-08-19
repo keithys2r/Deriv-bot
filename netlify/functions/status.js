@@ -7,7 +7,7 @@ const memory = require('./memory');
 exports.handler = async function () {
   try {
     const settings = await memory.loadSettings();
-    const strategyName = settings.activeStrategy || 'rise_fall';
+    const strategyName = settings.activeStrategy || 'accumulator';
 
     const state = await memory.loadState(strategyName);
     const activeTrade = await memory.getActiveTrade(strategyName);
@@ -20,7 +20,6 @@ exports.handler = async function () {
       headers: { 'Access-Control-Allow-Origin': '*' },
       body: JSON.stringify({
         activeStrategy: strategyName,
-        regime: state.regime || null,
         running: !state.manualPause,
         manualPause: state.manualPause,
         cooldownPaused: state.paused,

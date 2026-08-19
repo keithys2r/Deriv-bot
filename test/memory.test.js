@@ -29,7 +29,7 @@ module.exports = {
     assert.strictEqual(memory.getLosingStreakScaleFactor(2, undefined), 1.0);
   },
 
-  'getConfidenceScaleFactor: undefined confidence is a no-op (non-rise_fall strategies)'(assert) {
+  'getConfidenceScaleFactor: undefined confidence is a no-op (no current strategy produces one)'(assert) {
     assert.strictEqual(memory.getConfidenceScaleFactor(undefined), 1.0);
     assert.strictEqual(memory.getConfidenceScaleFactor(null), 1.0);
   },

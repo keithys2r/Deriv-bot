@@ -9,7 +9,7 @@ exports.handler = async function (event) {
   try {
     const params = event.queryStringParameters || {};
     const settings = await memory.loadSettings();
-    const strategyName = params.strategy || settings.activeStrategy || 'rise_fall';
+    const strategyName = params.strategy || settings.activeStrategy || 'accumulator';
 
     const stats = await memory.computeStats(strategyName);
 

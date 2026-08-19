@@ -8,7 +8,7 @@ const memory = require('./memory');
 
 const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ25V', '1HZ50V', '1HZ75V', '1HZ100V'];
 const ACCUMULATOR_GROWTH_RATES = [0.01, 0.02, 0.03, 0.04, 0.05]; // Deriv's allowed discrete growth rates
-const VALID_STRATEGIES = ['rise_fall', 'accumulator', 'hybrid'];
+const VALID_STRATEGIES = ['accumulator', 'digit_differ', 'hybrid'];
 
 // Shared with telegram-webhook.js, so a stake change via Telegram is
 // held to exactly the same 20%-of-stop-loss rule as one made from the
@@ -100,19 +100,14 @@ exports.handler = async function (event) {
         update.stakeAmount = validated.value;
       }
 
-      if (body.emaFastPeriod && body.emaFastPeriod > 0) update.emaFastPeriod = parseInt(body.emaFastPeriod);
-      if (body.emaSlowPeriod && body.emaSlowPeriod > 0) update.emaSlowPeriod = parseInt(body.emaSlowPeriod);
-      if (body.rsiPeriod && body.rsiPeriod > 0) update.rsiPeriod = parseInt(body.rsiPeriod);
-      if (body.rsiOverbought && body.rsiOverbought > 50 && body.rsiOverbought <= 100) update.rsiOverbought = parseInt(body.rsiOverbought);
-      if (body.rsiOversold && body.rsiOversold >= 0 && body.rsiOversold < 50) update.rsiOversold = parseInt(body.rsiOversold);
       if (body.candleGranularitySeconds && body.candleGranularitySeconds >= 5 && body.candleGranularitySeconds <= 60) {
         update.candleGranularitySeconds = parseInt(body.candleGranularitySeconds);
       }
       if (body.adxPeriod && body.adxPeriod >= 2 && body.adxPeriod <= 50) update.adxPeriod = parseInt(body.adxPeriod);
-      if (body.adxTrendThreshold && body.adxTrendThreshold >= 5 && body.adxTrendThreshold <= 90) update.adxTrendThreshold = parseInt(body.adxTrendThreshold);
-      if (body.adxRangeThreshold && body.adxRangeThreshold >= 5 && body.adxRangeThreshold <= 90) update.adxRangeThreshold = parseInt(body.adxRangeThreshold);
-      if (body.adxFloorTrend !== undefined && body.adxFloorTrend >= 0 && body.adxFloorTrend <= 90) update.adxFloorTrend = parseInt(body.adxFloorTrend);
-      if (body.adxFloorRange !== undefined && body.adxFloorRange >= 0 && body.adxFloorRange <= 90) update.adxFloorRange = parseInt(body.adxFloorRange);
+
+      if (body.digitDifferExcludeCount !== undefined && body.digitDifferExcludeCount >= 1 && body.digitDifferExcludeCount <= 9) {
+        update.digitDifferExcludeCount = parseInt(body.digitDifferExcludeCount);
+      }
 
       if (body.accumulatorGrowthRate !== undefined && ACCUMULATOR_GROWTH_RATES.includes(body.accumulatorGrowthRate)) {
         update.accumulatorGrowthRate = body.accumulatorGrowthRate;
