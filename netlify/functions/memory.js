@@ -651,6 +651,37 @@ function getStakeScaleFactor(weeklyNetProfit, weeklyProfitGoal) {
   return 1.0;
 }
 
+// Graduated stake reduction as a losing streak builds, so the bot backs
+// off smoothly instead of trading full-size right up until risk.js's
+// cooldown slams it to zero. Reduction ramps linearly to a 50% cut by
+// the time consecutiveLosses reaches maxConsecutiveLosses - the same
+// point risk.js fully pauses trading - so sizing and pausing converge
+// at the same threshold instead of disagreeing. Floors at 0.5x even if
+// cooldownEnabled is off and the streak keeps growing past that point.
+const MAX_LOSING_STREAK_REDUCTION = 0.5;
+function getLosingStreakScaleFactor(consecutiveLosses, maxConsecutiveLosses) {
+  if (!consecutiveLosses || consecutiveLosses <= 0) return 1.0;
+  if (!maxConsecutiveLosses || maxConsecutiveLosses <= 0) return 1.0;
+  const cappedLosses = Math.min(consecutiveLosses, maxConsecutiveLosses);
+  const reduction = (cappedLosses / maxConsecutiveLosses) * MAX_LOSING_STREAK_REDUCTION;
+  return 1.0 - reduction;
+}
+
+// Scales stake by signal confidence (0-1, from strategy_rise_fall.js's
+// details.confidence) - only ever scales DOWN from base, same philosophy
+// as the weekly/losing-streak factors. A low-confidence signal already
+// cleared whatever floor/threshold gated it into firing at all, so it
+// doesn't deserve a hard cutoff - a linear floor-to-1.0 ramp means
+// confidence 0 trades at half size, confidence 1 trades at full size.
+// Strategies without a confidence score (accumulator, even_odd) pass
+// undefined and get a no-op 1.0.
+const MIN_CONFIDENCE_FACTOR = 0.5;
+function getConfidenceScaleFactor(confidence) {
+  if (confidence === undefined || confidence === null || !Number.isFinite(confidence)) return 1.0;
+  const c = Math.max(0, Math.min(1, confidence));
+  return MIN_CONFIDENCE_FACTOR + c * (1 - MIN_CONFIDENCE_FACTOR);
+}
+
 module.exports = {
   loadState,
   saveState,
@@ -684,5 +715,7 @@ module.exports = {
   loadWeeklyState,
   saveWeeklyState,
   recordWeeklyTrade,
-  getStakeScaleFactor
+  getStakeScaleFactor,
+  getLosingStreakScaleFactor,
+  getConfidenceScaleFactor
 };
