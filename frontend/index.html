@@ -1002,8 +1002,16 @@
     authedFetch(SETTINGS_URL)
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        if (data.error || !data.settings) {
+          document.getElementById('settingsNote').textContent = 'Could not load settings: ' + (data.error || 'unknown error') + ' - Save is disabled until this loads.';
+          return;
+        }
         currentSettings = data.settings;
         renderSettings(data.settings, data.allowedSymbols);
+      })
+      .catch(function(err) {
+        document.getElementById('settingsNote').textContent = 'Could not load settings - check your connection and reload the page.';
+        console.error('Settings load error:', err);
       });
   }
 
@@ -1229,8 +1237,26 @@
   });
 
   document.getElementById('saveSettingsBtn').addEventListener('click', function() {
-    var selectedChip = document.querySelector('.symbol-chip.selected');
     var note = document.getElementById('settingsNote');
+
+    if (!currentSettings) {
+      note.textContent = 'Settings have not finished loading yet - wait a moment and try again.';
+      return;
+    }
+
+    try {
+      saveSettingsClicked(note);
+    } catch (err) {
+      // Anything unexpected here previously failed completely silently
+      // (an uncaught exception in a DOM event handler shows nothing to
+      // the user, just a console error) - surface it instead.
+      note.textContent = 'Save failed unexpectedly: ' + err.message;
+      console.error('Settings save error:', err);
+    }
+  });
+
+  function saveSettingsClicked(note) {
+    var selectedChip = document.querySelector('.symbol-chip.selected');
 
     var payload = {
       symbol: selectedChip ? selectedChip.getAttribute('data-symbol') : currentSettings.symbol,
@@ -1285,7 +1311,7 @@
       .finally(function() {
         saveBtn.disabled = false;
       });
-  });
+  }
 
   poll();
   pollBalance();
