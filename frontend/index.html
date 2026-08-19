@@ -507,6 +507,47 @@
     font-size: 12px;
     color: var(--ink-dim);
   }
+
+  /* Everything above is unchanged from the phone layout - .wrap stays a
+     single 480px-capped column by default. From here up, there's room
+     for two columns side by side instead of one long scroll, so status/
+     controls/settings go left and the logs/breakdowns go right. Uses
+     plain grid-column placement (no grid-template-areas, no HTML
+     changes) - each column's items auto-stack independently in source
+     order, which is why the left/right split below just lists selectors
+     rather than needing named areas. */
+  @media (min-width: 700px) {
+    .wrap {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 20px;
+      max-width: 900px;
+      align-content: start;
+      padding-bottom: 40px;
+    }
+
+    .topbar,
+    .wrap > h1,
+    .subtitle,
+    .account-banner,
+    .health-warning,
+    .balance-card,
+    .stats-grid,
+    .trade-card,
+    .controls,
+    #settingsToggle,
+    #settingsPanel {
+      grid-column: 1;
+    }
+
+    #liveLogPanel,
+    #performanceToggle,
+    #performancePanel,
+    #errorLogToggle,
+    #errorLogPanel {
+      grid-column: 2;
+    }
+  }
 </style>
 </head>
 <body>
@@ -690,7 +731,7 @@
     <p class="settings-note" id="settingsNote"></p>
   </div>
 
-  <div class="log-panel">
+  <div class="log-panel" id="liveLogPanel">
     <p class="log-header">Live log</p>
     <div class="log-lines" id="logLines">
       <div class="log-line"><span class="empty-log">Waiting for first data...</span></div>
