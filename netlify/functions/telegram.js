@@ -93,8 +93,14 @@ async function alertDailyGoalHit(strategyName, profit) {
   return sendMessage(`${EMOJI_CHECK} Daily goal hit!\nStrategy: <b>${strategyName}</b>\nProfit: $${profit.toFixed(2)}`);
 }
 
-async function alertWeeklyGoalHit(strategyName, profit) {
-  return sendMessage(`${EMOJI_CHECK} Weekly goal hit!\nStrategy: <b>${strategyName}</b>\nProfit: $${profit.toFixed(2)}\nPaused until next week.`);
+async function alertWeeklyGoalHit(strategyName, weeklyProfit, dailyProfit) {
+  return sendMessage(
+    `${EMOJI_CHECK} Weekly goal hit!\n` +
+    `Strategy: <b>${strategyName}</b>\n` +
+    `Weekly P&amp;L: $${weeklyProfit.toFixed(2)}\n` +
+    `Daily P&amp;L: $${dailyProfit.toFixed(2)}\n` +
+    `Paused until next week.`
+  );
 }
 
 async function alertStopLossHit(strategyName, loss) {

@@ -607,7 +607,8 @@ async function handleRiskGate(strategyName) {
     } else if (riskCheck.reason.startsWith('Weekly profit goal hit')) {
       const w = await memory.loadWeeklyState(strategyName);
       if (!w.weeklyGoalAlertSent) {
-        await telegram.alertWeeklyGoalHit(strategyName, w.weeklyProfit - w.weeklyLoss);
+        const s = await memory.loadState(strategyName);
+        await telegram.alertWeeklyGoalHit(strategyName, w.weeklyProfit - w.weeklyLoss, s.dailyProfit - s.dailyLoss);
         w.weeklyGoalAlertSent = true;
         await memory.saveWeeklyState(strategyName, w);
       }
@@ -677,7 +678,7 @@ async function handlePostTradeRisk(strategyName, updatedState) {
     if (postTradeRisk.reason.startsWith('Weekly profit goal hit')) {
       const w = await memory.loadWeeklyState(strategyName);
       if (!w.weeklyGoalAlertSent) {
-        await telegram.alertWeeklyGoalHit(strategyName, w.weeklyProfit - w.weeklyLoss);
+        await telegram.alertWeeklyGoalHit(strategyName, w.weeklyProfit - w.weeklyLoss, updatedState.dailyProfit - updatedState.dailyLoss);
         w.weeklyGoalAlertSent = true;
         await memory.saveWeeklyState(strategyName, w);
       }
