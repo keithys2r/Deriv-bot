@@ -93,14 +93,14 @@ async function handleCommand(rawText) {
 
 async function handleStartStop(paused) {
   const settings = await memory.loadSettings();
-  const strategyName = settings.activeStrategy || 'rise_fall';
+  const strategyName = settings.activeStrategy || 'accumulator';
   await memory.setManualPause(strategyName, paused);
   return telegram.sendMessage(`${paused ? '⏸ Stopped' : '✅ Started'} (strategy: <b>${strategyName}</b>)`);
 }
 
 async function handleStatus() {
   const settings = await memory.loadSettings();
-  const strategyName = settings.activeStrategy || 'rise_fall';
+  const strategyName = settings.activeStrategy || 'accumulator';
   const state = await memory.loadState(strategyName);
   const activeTrade = await memory.getActiveTrade(strategyName);
   const lastTrade = await memory.getLastTrade(strategyName);
@@ -127,12 +127,12 @@ async function handleStatus() {
   return telegram.sendMessage(text);
 }
 
-const VALID_STRATEGIES = ['rise_fall', 'accumulator', 'hybrid'];
+const VALID_STRATEGIES = ['accumulator', 'digit_differ', 'hybrid'];
 
 async function handleStrategy(arg) {
   if (!arg) {
     const settings = await memory.loadSettings();
-    return telegram.sendMessage(`Current strategy: <b>${settings.activeStrategy || 'rise_fall'}</b>\nSend /strategy with one of: ${VALID_STRATEGIES.join(', ')}.`);
+    return telegram.sendMessage(`Current strategy: <b>${settings.activeStrategy || 'accumulator'}</b>\nSend /strategy with one of: ${VALID_STRATEGIES.join(', ')}.`);
   }
 
   const strategyName = arg.toLowerCase();
@@ -168,7 +168,7 @@ async function handleHelp() {
     '/start - resume trading\n' +
     '/stop - pause trading\n' +
     '/status - current status, P&amp;L, active trade\n' +
-    '/strategy [rise_fall|accumulator|hybrid] - view or switch strategy\n' +
+    '/strategy [accumulator|digit_differ|hybrid] - view or switch strategy\n' +
     '/stake [amount] - view or change stake\n' +
     '/help - this message'
   );

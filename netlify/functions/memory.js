@@ -36,16 +36,13 @@ function defaultState() {
     recentEvents: [], // rolling log for the frontend, newest first, capped at 30
     stopLossAlertSent: false, // prevents re-alerting the same stop-loss hit every run
     goalAlertSent: false,     // same, for daily profit goal
-    regime: 'range',          // current market regime for adaptive rise/fall: 'trend' | 'range'
-    regimeTrendCount: 0,      // consecutive candles ADX has stayed above the trend threshold
-    regimeRangeCount: 0,      // consecutive candles ADX has stayed below the range threshold
     consecutiveApiFailures: 0, // consecutive driver.js runs that errored out - trips the kill switch
     killSwitchAlertSent: false, // prevents re-alerting every run once the kill switch has already paused the bot
     lastUpdated: new Date().toISOString()
   };
 }
 
-// Load state for a given strategy ("accumulator" or "rise_fall")
+// Load state for a given strategy ("accumulator", "digit_differ", "hybrid")
 // If nothing saved yet, or it's a new day, returns a fresh default state.
 async function loadState(strategyName) {
   const store = getMemoryStore();
@@ -220,22 +217,13 @@ const SETTINGS_KEY = 'bot_settings';
 
 function defaultSettings() {
   return {
-    activeStrategy: 'rise_fall', // 'rise_fall' | 'accumulator' | 'hybrid' - the switch
+    activeStrategy: 'accumulator', // 'accumulator' | 'digit_differ' | 'hybrid' - the switch
     symbol: 'R_100',
     autoSelectSymbol: false,
     watchlist: ['R_100', 'R_75', 'R_50'],
     stakeAmount: 1,
-    emaFastPeriod: 9,
-    emaSlowPeriod: 21,
-    rsiPeriod: 14,
-    rsiOverbought: 70,
-    rsiOversold: 30,
     candleGranularitySeconds: 15, // custom candle size built from raw ticks - Deriv's native minimum is 60s
     adxPeriod: 14,
-    adxTrendThreshold: 35, // ADX needs to stay above this to confirm trend regime
-    adxRangeThreshold: 25, // ADX needs to stay below this to confirm range regime
-    adxFloorTrend: 25,     // minimum ADX required to actually trade in trend regime
-    adxFloorRange: 0,      // minimum ADX required to trade in range regime (0 = disabled)
     accumulatorGrowthRate: 0.01,   // 1% - the safest/lowest of Deriv's allowed growth rates, wider knockout barrier
     accumulatorTakeProfitPct: 0.05, // cash out once profit reaches 5% of stake
     accumulatorTakeProfitTicks: 0,  // 0 = disabled, use accumulatorTakeProfitPct directly.
@@ -243,8 +231,12 @@ function defaultSettings() {
                                      // growth at the current growth rate instead - trades
                                      // win size for a higher chance of cashing out before
                                      // a knockout (see strategy_accumulator.ticksToTakeProfitPct)
-    accumulatorAdxMaxEntry: 20,    // only enter when ADX is at/below this (calm/ranging market)
+    accumulatorAdxMaxEntry: 20,    // only enter when ADX is at/below this (calm/ranging market) -
+                                     // also the ADX ceiling hybrid uses to route to accumulator
     accumulatorMaxHoldMinutes: 10, // safety backstop: force-sell if still open this long
+    digitDifferExcludeCount: 2,    // how many digits (0-9) to exclude per trade - win probability
+                                     // is exactly (excludeCount/10), fixed by the contract itself,
+                                     // not by any market read (see strategy_digit_differ.js)
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
     weeklyProfitGoal: 100,
@@ -311,50 +303,13 @@ async function getLastTrade(strategyName) {
   }
 }
 
-// Updates the trend/range regime using hysteresis - needs several
-// consecutive candles above/below the ADX thresholds before actually
-// switching, so it doesn't flip-flop on every small wiggle. Ported
-// from the old bot's regime-switching logic.
-async function updateRegime(strategyName, adx, trendThreshold, rangeThreshold, trendConfirmCandles, rangeConfirmCandles) {
-  const state = await loadState(strategyName);
-
-  if (adx === null || adx === undefined) {
-    return { regime: state.regime || 'range', switched: false };
-  }
-
-  if (adx >= trendThreshold) {
-    state.regimeTrendCount = (state.regimeTrendCount || 0) + 1;
-    state.regimeRangeCount = 0;
-  } else if (adx < rangeThreshold) {
-    state.regimeRangeCount = (state.regimeRangeCount || 0) + 1;
-    state.regimeTrendCount = 0;
-  } else {
-    state.regimeTrendCount = Math.max(0, (state.regimeTrendCount || 0) - 1);
-    state.regimeRangeCount = Math.max(0, (state.regimeRangeCount || 0) - 1);
-  }
-
-  const prevRegime = state.regime || 'range';
-  let switched = false;
-
-  if (prevRegime === 'range' && state.regimeTrendCount >= trendConfirmCandles) {
-    state.regime = 'trend';
-    switched = true;
-  } else if (prevRegime === 'trend' && state.regimeRangeCount >= rangeConfirmCandles) {
-    state.regime = 'range';
-    switched = true;
-  }
-
-  await saveState(strategyName, state);
-  return { regime: state.regime, switched, trendCount: state.regimeTrendCount, rangeCount: state.regimeRangeCount };
-}
-
 const LOCK_KEY = 'execution_lock';
 const LOCK_TIMEOUT_MS = 25000; // if a lock is older than this, assume the holder crashed/died and allow a new run
 
 // Prevents two invocations from running the trade logic at the same
 // time - important because Netlify can retry a scheduled function that
 // runs too long, and an overlapping run could place a duplicate trade
-// or race with the original run's state writes (regime counters, etc).
+// or race with the original run's state writes.
 async function acquireLock() {
   const store = getMemoryStore();
   const existing = await store.get(LOCK_KEY, { type: 'json' });
@@ -408,7 +363,7 @@ async function recordTradeHistory(strategyName, record) {
     profit: record.profit,
     exitReason: record.exitReason || null, // accumulator only: 'take_profit' | 'knockout' | 'timeout'
     holdSeconds: record.holdSeconds !== undefined ? record.holdSeconds : null, // accumulator only
-    subStrategy: record.subStrategy || null // hybrid only: 'rise_fall' | 'accumulator' - which style hybrid picked for this trade
+    subStrategy: record.subStrategy || null // hybrid only: 'digit_differ' | 'accumulator' - which style hybrid picked for this trade
   });
 
   if (history.length > TRADE_HISTORY_MAX) {
@@ -438,7 +393,7 @@ async function computeStats(strategyName) {
   const byRegime = {}; // 'trend' | 'range' -> { wins, losses, profit }
   const bySymbol = {}; // symbol -> { wins, losses, profit }
   const byExitReason = {}; // accumulator only: 'take_profit' | 'knockout' | 'timeout' -> { wins, losses, profit }
-  const bySubStrategy = {}; // hybrid only: 'rise_fall' | 'accumulator' -> { wins, losses, profit }
+  const bySubStrategy = {}; // hybrid only: 'digit_differ' | 'accumulator' -> { wins, losses, profit }
 
   let totalWins = 0;
   let totalLosses = 0;
@@ -524,73 +479,6 @@ async function computeStats(strategyName) {
   };
 }
 
-// Per-SYMBOL regime tracking, separate from the daily P&L/risk state -
-// different symbols can genuinely be in different regimes at the same
-// time (Gold trending while Vol 100 ranges), so each needs its own
-// independent hysteresis counters.
-async function getRegimeState(symbol) {
-  const store = getMemoryStore();
-  try {
-    const state = await store.get(`regime_state_${symbol}`, { type: 'json' });
-    return state || { regime: 'range', regimeTrendCount: 0, regimeRangeCount: 0, tradedThisEpisode: false };
-  } catch (e) {
-    return { regime: 'range', regimeTrendCount: 0, regimeRangeCount: 0, tradedThisEpisode: false };
-  }
-}
-
-async function updateRegimeForSymbol(symbol, adx, trendThreshold, rangeThreshold, trendConfirmCandles, rangeConfirmCandles) {
-  const store = getMemoryStore();
-  const state = await getRegimeState(symbol);
-
-  if (adx === null || adx === undefined) {
-    return { regime: state.regime || 'range', switched: false, tradedThisEpisode: state.tradedThisEpisode || false };
-  }
-
-  if (adx >= trendThreshold) {
-    state.regimeTrendCount = (state.regimeTrendCount || 0) + 1;
-    state.regimeRangeCount = 0;
-  } else if (adx < rangeThreshold) {
-    state.regimeRangeCount = (state.regimeRangeCount || 0) + 1;
-    state.regimeTrendCount = 0;
-  } else {
-    state.regimeTrendCount = Math.max(0, (state.regimeTrendCount || 0) - 1);
-    state.regimeRangeCount = Math.max(0, (state.regimeRangeCount || 0) - 1);
-  }
-
-  const prevRegime = state.regime || 'range';
-  let switched = false;
-
-  if (prevRegime === 'range' && state.regimeTrendCount >= trendConfirmCandles) {
-    state.regime = 'trend';
-    switched = true;
-  } else if (prevRegime === 'trend' && state.regimeRangeCount >= rangeConfirmCandles) {
-    state.regime = 'range';
-    switched = true;
-  }
-
-  // A fresh regime switch is a fresh episode - clear the "already traded
-  // this read" gate so a new setup can trade once. Without this, the
-  // very first regime this symbol ever enters would be permanently
-  // capped at zero trades.
-  if (switched) {
-    state.tradedThisEpisode = false;
-  }
-
-  await store.setJSON(`regime_state_${symbol}`, state);
-  return { regime: state.regime, switched, tradedThisEpisode: state.tradedThisEpisode || false };
-}
-
-// Marks the current regime episode for this symbol as already traded -
-// caps correlated re-entry (the same continuing TREND/RANGE read betting
-// again every ~60s run) to one trade per episode, until the regime
-// actually changes. Called right after a trade is confirmed placed.
-async function markTradedThisEpisode(symbol) {
-  const store = getMemoryStore();
-  const state = await getRegimeState(symbol);
-  state.tradedThisEpisode = true;
-  await store.setJSON(`regime_state_${symbol}`, state);
-}
-
 // ---- Weekly profit tracking (separate from daily state) ----
 // Powers the "de-risk as you approach your weekly target" feature -
 // stake scales DOWN as you get closer to the goal, protecting gains
@@ -665,14 +553,14 @@ function getLosingStreakScaleFactor(consecutiveLosses, maxConsecutiveLosses) {
   return 1.0 - reduction;
 }
 
-// Scales stake by signal confidence (0-1, from strategy_rise_fall.js's
-// details.confidence) - only ever scales DOWN from base, same philosophy
-// as the weekly/losing-streak factors. A low-confidence signal already
-// cleared whatever floor/threshold gated it into firing at all, so it
-// doesn't deserve a hard cutoff - a linear floor-to-1.0 ramp means
-// confidence 0 trades at half size, confidence 1 trades at full size.
-// Strategies without a confidence score (accumulator) pass undefined
-// and get a no-op 1.0.
+// Scales stake by signal confidence (0-1) - only ever scales DOWN from
+// base, same philosophy as the weekly/losing-streak factors. A
+// low-confidence signal already cleared whatever floor/threshold gated
+// it into firing at all, so it doesn't deserve a hard cutoff - a linear
+// floor-to-1.0 ramp means confidence 0 trades at half size, confidence 1
+// trades at full size. No current strategy produces a confidence score
+// (kept as an optional no-op hook for a future one that does) - passing
+// undefined returns a no-op 1.0.
 const MIN_CONFIDENCE_FACTOR = 0.5;
 function getConfidenceScaleFactor(confidence) {
   if (confidence === undefined || confidence === null || !Number.isFinite(confidence)) return 1.0;
@@ -700,15 +588,11 @@ module.exports = {
   getActiveTrade,
   setLastTrade,
   getLastTrade,
-  updateRegime,
   acquireLock,
   releaseLock,
   recordTradeHistory,
   getTradeHistory,
   computeStats,
-  getRegimeState,
-  updateRegimeForSymbol,
-  markTradedThisEpisode,
   getWeekStartUTC,
   loadWeeklyState,
   saveWeeklyState,

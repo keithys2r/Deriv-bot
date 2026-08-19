@@ -31,7 +31,7 @@ exports.handler = async function (event) {
 
     const paused = action === 'stop';
     const settings = await memory.loadSettings();
-    const strategyName = settings.activeStrategy || 'rise_fall';
+    const strategyName = settings.activeStrategy || 'accumulator';
     const state = await memory.setManualPause(strategyName, paused);
 
     return {

@@ -2,22 +2,22 @@
 // Entry-gate logic for Accumulator contracts.
 // This file does NOT connect to Deriv, does NOT place trades, and does
 // NOT persist anything between runs - pure function of whatever candle
-// data and params it's given, same shape as strategy_rise_fall.js.
+// data and params it's given.
 //
 // Accumulators aren't directional (no CALL/PUT) - the contract just
 // accrues stake growth tick by tick until either the price breaches an
 // implicit barrier (knockout, full stake lost) or it's cashed out via
 // take-profit. So there's no "signal" to compute, only a survival-odds
 // gate: enter when the market is calm (low ADX / ranging), since a
-// volatile market breaches the barrier faster. Reuses the ADX calc
-// already built for rise_fall instead of duplicating it.
+// volatile market breaches the barrier faster. Reuses the shared ADX
+// calc (indicators.js) instead of duplicating it.
 
-const { calculateADX } = require('./strategy_rise_fall');
+const { calculateADX } = require('./indicators');
 
 const STRATEGY_NAME = 'accumulator';
 const DEFAULT_ADX_MAX_ENTRY = 20;
 
-// Input: OHLC candles (same shape as strategy_rise_fall consumes) and
+// Input: OHLC candles (high/low/close per candle) and
 // params { adxPeriod, adxMaxEntry }.
 // Output: { canEnter: boolean, reason, adx }
 function getEntryDecision(candles, params) {

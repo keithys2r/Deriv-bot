@@ -415,30 +415,6 @@
     line-height: 1.4;
   }
 
-  .regime-badge {
-    display: inline-block;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    padding: 3px 10px;
-    border-radius: 20px;
-    margin: 0 0 12px;
-  }
-
-  .regime-badge.trend {
-    color: var(--green);
-    background: rgba(58, 219, 118, 0.1);
-    border: 1px solid var(--green);
-  }
-
-  .regime-badge.range {
-    color: var(--phosphor);
-    background: rgba(255, 180, 84, 0.1);
-    border: 1px solid var(--phosphor);
-  }
-
   .account-banner {
     display: inline-block;
     font-family: 'IBM Plex Mono', monospace;
@@ -541,9 +517,8 @@
   </div>
 
   <h1>BandzzBot</h1>
-  <p class="subtitle" id="subtitleSymbol">RISE/FALL &middot; VOLATILITY 100 &middot; DEMO</p>
+  <p class="subtitle" id="subtitleSymbol">ACCUMULATOR &middot; VOLATILITY 100 &middot; DEMO</p>
   <p class="account-banner demo" id="accountBanner" style="display:none;"></p>
-  <p class="regime-badge" id="regimeBadge" style="display:none;"></p>
   <p class="health-warning" id="healthWarning" style="display:none;"></p>
 
   <div class="balance-card">
@@ -590,8 +565,8 @@
 
     <p class="settings-section-label">Active strategy</p>
     <div class="strategy-toggle">
-      <button type="button" class="strategy-btn" id="riseFallBtn" data-strategy="rise_fall">Rise/Fall</button>
       <button type="button" class="strategy-btn" id="accumulatorBtn" data-strategy="accumulator">Accumulator</button>
+      <button type="button" class="strategy-btn" id="digitDifferBtn" data-strategy="digit_differ">Digit Differ</button>
       <button type="button" class="strategy-btn" id="hybridBtn" data-strategy="hybrid">Hybrid</button>
     </div>
 
@@ -615,55 +590,6 @@
 
     <p class="settings-section-label">Stake per trade ($)</p>
     <input type="number" id="stakeInput" min="0.35" step="0.5" value="1">
-
-    <div id="riseFallSettings">
-      <p class="settings-section-label">Indicator settings</p>
-      <div class="settings-grid">
-        <div>
-          <label>EMA fast</label>
-          <input type="number" id="emaFastInput" min="2" value="9">
-        </div>
-        <div>
-          <label>EMA slow</label>
-          <input type="number" id="emaSlowInput" min="3" value="21">
-        </div>
-        <div>
-          <label>RSI period</label>
-          <input type="number" id="rsiPeriodInput" min="2" value="14">
-        </div>
-        <div>
-          <label>RSI overbought</label>
-          <input type="number" id="rsiOverboughtInput" min="51" max="100" value="70">
-        </div>
-        <div>
-          <label>RSI oversold</label>
-          <input type="number" id="rsiOversoldInput" min="0" max="49" value="30">
-        </div>
-      </div>
-      <p class="settings-section-label" style="margin-top:14px;">Candle timeframe (seconds)</p>
-      <input type="number" id="granularityInput" min="5" max="60" step="5" value="15">
-      <p class="settings-note" style="text-align:left;margin-top:6px;">Custom candles built from raw ticks - Deriv's own candles bottom out at 60s. Lower = catches faster moves, but noisier.</p>
-
-      <p class="settings-section-label" style="margin-top:14px;">ADX regime detection</p>
-      <div class="settings-grid">
-        <div>
-          <label>ADX period</label>
-          <input type="number" id="adxPeriodInput" min="2" max="50" value="14">
-        </div>
-        <div>
-          <label>Trend threshold</label>
-          <input type="number" id="adxTrendInput" min="5" max="90" value="35">
-        </div>
-        <div>
-          <label>Range threshold</label>
-          <input type="number" id="adxRangeInput" min="5" max="90" value="25">
-        </div>
-        <div>
-          <label>Trend ADX floor</label>
-          <input type="number" id="adxFloorTrendInput" min="0" max="90" value="25">
-        </div>
-      </div>
-    </div>
 
     <div id="accumulatorSettings" style="display:none;">
       <p class="settings-section-label">Accumulator settings</p>
@@ -694,13 +620,32 @@
           <label>Max hold (minutes)</label>
           <input type="number" id="accumulatorMaxHoldInput" min="1" max="60" value="10">
         </div>
+        <div>
+          <label>ADX period</label>
+          <input type="number" id="adxPeriodInput" min="2" max="50" value="14">
+        </div>
+        <div>
+          <label>Candle timeframe (seconds)</label>
+          <input type="number" id="granularityInput" min="5" max="60" step="5" value="15">
+        </div>
       </div>
-      <p class="settings-note" style="text-align:left;margin-top:6px;">Survival-focused: only enters when ADX reads calm/ranging (lower = safer), cashes out automatically once take-profit is hit, and force-sells as a backstop if a trade runs past the max hold time. Set target ticks instead of a flat percentage to cash out faster and more reliably, at the cost of a smaller win (0 = use the percentage field instead).</p>
+      <p class="settings-note" style="text-align:left;margin-top:6px;">Survival-focused: only enters when ADX reads calm/ranging (lower = safer), cashes out automatically once take-profit is hit, and force-sells as a backstop if a trade runs past the max hold time. Set target ticks instead of a flat percentage to cash out faster and more reliably, at the cost of a smaller win (0 = use the percentage field instead). Candles are custom-built from raw ticks (Deriv's own bottom out at 60s) purely to compute ADX - lower = catches faster moves, but noisier.</p>
+    </div>
+
+    <div id="digitDifferSettings" style="display:none;">
+      <p class="settings-section-label">Digit Differ settings</p>
+      <div class="settings-grid">
+        <div>
+          <label>Digits to exclude</label>
+          <input type="number" id="digitDifferExcludeCountInput" min="1" max="9" step="1" value="2">
+        </div>
+      </div>
+      <p class="settings-note" style="text-align:left;margin-top:6px;">Fixed-odds, not directional: bets the next tick's last digit won't be one of N excluded digits. Win probability is exactly N/10, guaranteed by the contract itself - not a market read, so which digits get excluded doesn't matter (picked by simple rotation). More excluded digits means a higher win rate but a smaller payout per win - same skew as every other contract here, just shaped differently. Stake is split evenly across the N simultaneous bets, all placed over one connection.</p>
     </div>
 
     <div id="hybridSettings" style="display:none;">
       <p class="settings-section-label">Hybrid</p>
-      <p class="settings-note" style="text-align:left;">Reads ADX on your chosen symbol each run and picks a style automatically: calm &rarr; Accumulator, trending or unclear &rarr; Rise/Fall (which may sit out a run if its own regime logic isn't confident). Uses whatever Rise/Fall and Accumulator are already configured to (switch to each tab to tune them) - just set your stake and risk limits below and it runs on its own. Tracked as its own strategy with its own stats, separate from running each style manually.</p>
+      <p class="settings-note" style="text-align:left;">Reads ADX on your chosen symbol each run and picks a style automatically: calm &rarr; Accumulator (survival mode), anything else &rarr; Digit Differ (fixed-odds, doesn't care about market conditions). Uses whatever Accumulator and Digit Differ are already configured to (switch to each tab to tune them) - just set your stake and risk limits below and it runs on its own. Tracked as its own strategy with its own stats, separate from running each style manually.</p>
     </div>
 
     <p class="settings-section-label">Risk management</p>
@@ -779,7 +724,7 @@
   var STATS_URL = '/.netlify/functions/stats';
 
   var currentSettings = null;
-  var selectedStrategy = 'rise_fall';
+  var selectedStrategy = 'accumulator';
   var statsLoaded = false;
 
   function updateClock() {
@@ -813,7 +758,7 @@
     var statusText = document.getElementById('statusText');
 
     if (data.activeStrategy) selectedStrategy = data.activeStrategy;
-    var strategyLabel = STRATEGY_LABELS[data.activeStrategy] || 'RISE/FALL';
+    var strategyLabel = STRATEGY_LABELS[data.activeStrategy] || 'ACCUMULATOR';
     document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 DEMO';
 
     var weeklyNote = document.getElementById('weeklyProgressNote');
@@ -821,15 +766,6 @@
       var wProgress = Math.max(0, (data.weeklyNetProfit / currentSettings.weeklyProfitGoal) * 100);
       var wSign = data.weeklyNetProfit >= 0 ? '+' : '-';
       weeklyNote.textContent = 'This week: ' + wSign + '$' + Math.abs(data.weeklyNetProfit).toFixed(2) + ' (' + Math.min(100, Math.round(wProgress)) + '% of goal)';
-    }
-
-    var regimeBadge = document.getElementById('regimeBadge');
-    if (data.activeStrategy === 'rise_fall' && data.regime) {
-      regimeBadge.style.display = 'inline-block';
-      regimeBadge.className = 'regime-badge ' + data.regime;
-      regimeBadge.textContent = data.regime === 'trend' ? '\u25B2 Trend regime' : '\u2194 Range regime';
-    } else {
-      regimeBadge.style.display = 'none';
     }
 
     if (data.manualPause) {
@@ -984,8 +920,8 @@
   };
 
   var STRATEGY_LABELS = {
-    rise_fall: 'RISE/FALL',
     accumulator: 'ACCUMULATOR',
+    digit_differ: 'DIGIT DIFFER',
     hybrid: 'HYBRID'
   };
 
@@ -999,25 +935,18 @@
   }
 
   function renderSettings(settings, allowedSymbols) {
-    selectedStrategy = settings.activeStrategy || 'rise_fall';
+    selectedStrategy = settings.activeStrategy || 'accumulator';
     updateStrategyToggleUI();
 
     document.getElementById('stakeInput').value = settings.stakeAmount;
-    document.getElementById('emaFastInput').value = settings.emaFastPeriod;
-    document.getElementById('emaSlowInput').value = settings.emaSlowPeriod;
-    document.getElementById('rsiPeriodInput').value = settings.rsiPeriod;
-    document.getElementById('rsiOverboughtInput').value = settings.rsiOverbought;
-    document.getElementById('rsiOversoldInput').value = settings.rsiOversold;
     document.getElementById('granularityInput').value = settings.candleGranularitySeconds || 15;
     document.getElementById('adxPeriodInput').value = settings.adxPeriod || 14;
-    document.getElementById('adxTrendInput').value = settings.adxTrendThreshold || 35;
-    document.getElementById('adxRangeInput').value = settings.adxRangeThreshold || 25;
-    document.getElementById('adxFloorTrendInput').value = settings.adxFloorTrend ?? 25;
     document.getElementById('accumulatorGrowthRateInput').value = settings.accumulatorGrowthRate || 0.01;
     document.getElementById('accumulatorTakeProfitInput').value = Math.round((settings.accumulatorTakeProfitPct || 0.05) * 100);
     document.getElementById('accumulatorTakeProfitTicksInput').value = settings.accumulatorTakeProfitTicks || 0;
     document.getElementById('accumulatorAdxMaxInput').value = settings.accumulatorAdxMaxEntry || 20;
     document.getElementById('accumulatorMaxHoldInput').value = settings.accumulatorMaxHoldMinutes || 10;
+    document.getElementById('digitDifferExcludeCountInput').value = settings.digitDifferExcludeCount || 2;
     document.getElementById('profitGoalInput').value = settings.dailyProfitGoal;
     document.getElementById('stopLossInput').value = settings.dailyStopLoss;
     document.getElementById('maxLossesInput').value = settings.maxConsecutiveLosses;
@@ -1027,7 +956,7 @@
     document.getElementById('autoSelectInput').checked = settings.autoSelectSymbol === true;
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
-    var strategyLabel = STRATEGY_LABELS[selectedStrategy] || 'RISE/FALL';
+    var strategyLabel = STRATEGY_LABELS[selectedStrategy] || 'ACCUMULATOR';
     if (settings.autoSelectSymbol && NO_AUTO_SELECT_STRATEGIES.indexOf(selectedStrategy) === -1) {
       document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 AUTO-SCAN \u00B7 DEMO';
     } else {
@@ -1075,22 +1004,21 @@
     document.getElementById('watchlistCount').textContent = count + ' of 3 selected';
   }
 
-  // hybrid is single-symbol only - no watchlist-scan support in driver.js
-  // (it always forces manual-symbol mode on whichever style it picks, see
-  // runHybridStrategy).
-  var NO_AUTO_SELECT_STRATEGIES = ['hybrid'];
+  // accumulator is the only strategy with watchlist-scan support -
+  // digit_differ doesn't need a market read at all (fixed odds
+  // regardless of symbol), and hybrid always forces manual-symbol mode
+  // on whichever style it picks (see runHybridStrategy).
+  var NO_AUTO_SELECT_STRATEGIES = ['digit_differ', 'hybrid'];
 
   function updateStrategyToggleUI() {
-    document.getElementById('riseFallBtn').className = 'strategy-btn' + (selectedStrategy === 'rise_fall' ? ' selected' : '');
     document.getElementById('accumulatorBtn').className = 'strategy-btn' + (selectedStrategy === 'accumulator' ? ' selected' : '');
+    document.getElementById('digitDifferBtn').className = 'strategy-btn' + (selectedStrategy === 'digit_differ' ? ' selected' : '');
     document.getElementById('hybridBtn').className = 'strategy-btn' + (selectedStrategy === 'hybrid' ? ' selected' : '');
-    document.getElementById('riseFallSettings').style.display = selectedStrategy === 'rise_fall' ? 'block' : 'none';
     document.getElementById('accumulatorSettings').style.display = selectedStrategy === 'accumulator' ? 'block' : 'none';
+    document.getElementById('digitDifferSettings').style.display = selectedStrategy === 'digit_differ' ? 'block' : 'none';
     document.getElementById('hybridSettings').style.display = selectedStrategy === 'hybrid' ? 'block' : 'none';
     document.getElementById('autoSelectSection').style.display = NO_AUTO_SELECT_STRATEGIES.indexOf(selectedStrategy) === -1 ? 'block' : 'none';
-    document.getElementById('autoSelectLabel').textContent = selectedStrategy === 'accumulator'
-      ? 'Auto-select calmest symbol - scans 3 watchlist symbols each run, trades whichever has the lowest volatility'
-      : 'Auto-select best symbol - scans 3 watchlist symbols each run, trades whichever has the strongest signal';
+    document.getElementById('autoSelectLabel').textContent = 'Auto-select calmest symbol - scans 3 watchlist symbols each run, trades whichever has the lowest volatility';
     updateSymbolSectionVisibility();
   }
 
@@ -1102,12 +1030,12 @@
 
   document.getElementById('autoSelectInput').addEventListener('change', updateSymbolSectionVisibility);
 
-  document.getElementById('riseFallBtn').addEventListener('click', function() {
-    selectedStrategy = 'rise_fall';
-    updateStrategyToggleUI();
-  });
   document.getElementById('accumulatorBtn').addEventListener('click', function() {
     selectedStrategy = 'accumulator';
+    updateStrategyToggleUI();
+  });
+  document.getElementById('digitDifferBtn').addEventListener('click', function() {
+    selectedStrategy = 'digit_differ';
     updateStrategyToggleUI();
   });
   document.getElementById('hybridBtn').addEventListener('click', function() {
@@ -1175,32 +1103,33 @@
         });
 
         var regimeLabel = document.getElementById('perfRegimeLabel');
-        regimeLabel.style.display = 'block';
-        document.getElementById('perfByRegime').style.display = 'flex';
-        if (data.strategy === 'accumulator') {
-          // Reuses the same "by regime" list/label for the accumulator's
-          // survival-focused breakdown instead - how each trade actually
-          // ended (hit take-profit, got knocked out, or force-sold by
-          // the safety timer), which is the metric that matters here.
-          regimeLabel.textContent = 'By exit reason';
-          var exitReasonLabels = { take_profit: 'Take Profit', knockout: 'Knockout', timeout: 'Timeout (safety sell)' };
-          renderPerfList('perfByRegime', data.byExitReason || {}, function(r) {
-            return exitReasonLabels[r] || r.toUpperCase();
-          });
-        } else if (data.strategy === 'hybrid') {
-          // Hybrid has its own stats bucket - the breakdown that matters
-          // here is which underlying style it picked each run, not a
-          // regime or exit reason (those belong to the picked style).
-          regimeLabel.textContent = 'By style';
-          var subStrategyLabels = { rise_fall: 'Rise/Fall', accumulator: 'Accumulator' };
-          renderPerfList('perfByRegime', data.bySubStrategy || {}, function(s) {
-            return subStrategyLabels[s] || s.toUpperCase();
-          });
+        if (data.strategy === 'digit_differ') {
+          // Fixed-odds, no regime/exit-reason/style concept per trade -
+          // nothing meaningful to show in this section.
+          regimeLabel.style.display = 'none';
+          document.getElementById('perfByRegime').style.display = 'none';
         } else {
-          regimeLabel.textContent = 'By regime';
-          renderPerfList('perfByRegime', data.byRegime, function(r) {
-            return r.toUpperCase();
-          });
+          regimeLabel.style.display = 'block';
+          document.getElementById('perfByRegime').style.display = 'flex';
+          if (data.strategy === 'accumulator') {
+            // Reuses the same "by regime" list/label for the accumulator's
+            // survival-focused breakdown instead - how each trade actually
+            // ended (hit take-profit, got knocked out, or force-sold by
+            // the safety timer), which is the metric that matters here.
+            regimeLabel.textContent = 'By exit reason';
+            var exitReasonLabels = { take_profit: 'Take Profit', knockout: 'Knockout', timeout: 'Timeout (safety sell)' };
+            renderPerfList('perfByRegime', data.byExitReason || {}, function(r) {
+              return exitReasonLabels[r] || r.toUpperCase();
+            });
+          } else {
+            // hybrid - its own stats bucket, breakdown by which underlying
+            // style it picked each run.
+            regimeLabel.textContent = 'By style';
+            var subStrategyLabels = { digit_differ: 'Digit Differ', accumulator: 'Accumulator' };
+            renderPerfList('perfByRegime', data.bySubStrategy || {}, function(s) {
+              return subStrategyLabels[s] || s.toUpperCase();
+            });
+          }
         }
 
         renderPerfList('perfBySymbol', data.bySymbol, function(s) {
@@ -1234,21 +1163,14 @@
       symbol: selectedChip ? selectedChip.getAttribute('data-symbol') : currentSettings.symbol,
       activeStrategy: selectedStrategy,
       stakeAmount: parseFloat(document.getElementById('stakeInput').value),
-      emaFastPeriod: parseInt(document.getElementById('emaFastInput').value),
-      emaSlowPeriod: parseInt(document.getElementById('emaSlowInput').value),
-      rsiPeriod: parseInt(document.getElementById('rsiPeriodInput').value),
-      rsiOverbought: parseInt(document.getElementById('rsiOverboughtInput').value),
-      rsiOversold: parseInt(document.getElementById('rsiOversoldInput').value),
       candleGranularitySeconds: parseInt(document.getElementById('granularityInput').value),
       adxPeriod: parseInt(document.getElementById('adxPeriodInput').value),
-      adxTrendThreshold: parseInt(document.getElementById('adxTrendInput').value),
-      adxRangeThreshold: parseInt(document.getElementById('adxRangeInput').value),
-      adxFloorTrend: parseInt(document.getElementById('adxFloorTrendInput').value),
       accumulatorGrowthRate: parseFloat(document.getElementById('accumulatorGrowthRateInput').value),
       accumulatorTakeProfitPct: parseInt(document.getElementById('accumulatorTakeProfitInput').value) / 100,
       accumulatorTakeProfitTicks: parseInt(document.getElementById('accumulatorTakeProfitTicksInput').value) || 0,
       accumulatorAdxMaxEntry: parseInt(document.getElementById('accumulatorAdxMaxInput').value),
       accumulatorMaxHoldMinutes: parseInt(document.getElementById('accumulatorMaxHoldInput').value),
+      digitDifferExcludeCount: parseInt(document.getElementById('digitDifferExcludeCountInput').value),
       dailyProfitGoal: parseFloat(document.getElementById('profitGoalInput').value),
       dailyStopLoss: parseFloat(document.getElementById('stopLossInput').value),
       maxConsecutiveLosses: parseInt(document.getElementById('maxLossesInput').value),
