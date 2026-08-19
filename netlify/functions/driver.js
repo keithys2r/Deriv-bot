@@ -604,6 +604,13 @@ async function handleRiskGate(strategyName) {
 
     if (riskCheck.reason.includes('cooldown started')) {
       await telegram.alertPaused(strategyName, riskCheck.reason);
+    } else if (riskCheck.reason.startsWith('Weekly profit goal hit')) {
+      const w = await memory.loadWeeklyState(strategyName);
+      if (!w.weeklyGoalAlertSent) {
+        await telegram.alertWeeklyGoalHit(strategyName, w.weeklyProfit - w.weeklyLoss);
+        w.weeklyGoalAlertSent = true;
+        await memory.saveWeeklyState(strategyName, w);
+      }
     } else if (riskCheck.reason.includes('profit goal hit')) {
       const s = await memory.loadState(strategyName);
       if (!s.goalAlertSent) {
@@ -667,7 +674,14 @@ async function recordAndLogTrade(strategyName, direction, symbol, stake, tradeRe
 async function handlePostTradeRisk(strategyName, updatedState) {
   const postTradeRisk = await risk.checkCanTrade(strategyName);
   if (!postTradeRisk.canTrade) {
-    if (postTradeRisk.reason.includes('profit goal hit') && !updatedState.goalAlertSent) {
+    if (postTradeRisk.reason.startsWith('Weekly profit goal hit')) {
+      const w = await memory.loadWeeklyState(strategyName);
+      if (!w.weeklyGoalAlertSent) {
+        await telegram.alertWeeklyGoalHit(strategyName, w.weeklyProfit - w.weeklyLoss);
+        w.weeklyGoalAlertSent = true;
+        await memory.saveWeeklyState(strategyName, w);
+      }
+    } else if (postTradeRisk.reason.includes('profit goal hit') && !updatedState.goalAlertSent) {
       await telegram.alertDailyGoalHit(strategyName, updatedState.dailyProfit - updatedState.dailyLoss);
       updatedState.goalAlertSent = true;
       await memory.saveState(strategyName, updatedState);

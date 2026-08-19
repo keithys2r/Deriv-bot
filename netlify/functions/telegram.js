@@ -93,6 +93,10 @@ async function alertDailyGoalHit(strategyName, profit) {
   return sendMessage(`${EMOJI_CHECK} Daily goal hit!\nStrategy: <b>${strategyName}</b>\nProfit: $${profit.toFixed(2)}`);
 }
 
+async function alertWeeklyGoalHit(strategyName, profit) {
+  return sendMessage(`${EMOJI_CHECK} Weekly goal hit!\nStrategy: <b>${strategyName}</b>\nProfit: $${profit.toFixed(2)}\nPaused until next week.`);
+}
+
 async function alertStopLossHit(strategyName, loss) {
   return sendMessage(`${EMOJI_STOP} Daily stop loss hit\nStrategy: <b>${strategyName}</b>\nLoss: $${loss.toFixed(2)}`);
 }
@@ -133,6 +137,7 @@ module.exports = {
   alertBotStarted,
   alertPaused,
   alertDailyGoalHit,
+  alertWeeklyGoalHit,
   alertStopLossHit,
   alertEODReport,
   alertTradeResult
