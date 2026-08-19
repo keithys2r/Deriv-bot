@@ -243,6 +243,11 @@ function defaultSettings() {
     biasThresholdPct: 0.05,
     accumulatorGrowthRate: 0.01,   // 1% - the safest/lowest of Deriv's allowed growth rates, wider knockout barrier
     accumulatorTakeProfitPct: 0.05, // cash out once profit reaches 5% of stake
+    accumulatorTakeProfitTicks: 0,  // 0 = disabled, use accumulatorTakeProfitPct directly.
+                                     // >0 = derive take-profit from this many ticks of
+                                     // growth at the current growth rate instead - trades
+                                     // win size for a higher chance of cashing out before
+                                     // a knockout (see strategy_accumulator.ticksToTakeProfitPct)
     accumulatorAdxMaxEntry: 20,    // only enter when ADX is at/below this (calm/ranging market)
     accumulatorMaxHoldMinutes: 10, // safety backstop: force-sell if still open this long
     evenOddLookback: 20,       // how many recent ticks the "fade the hot parity" heuristic looks at

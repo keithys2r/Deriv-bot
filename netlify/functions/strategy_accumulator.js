@@ -46,8 +46,19 @@ function getEntryDecision(candles, params) {
   };
 }
 
+// Converts a target tick-count into the equivalent take-profit
+// percentage for a given growth rate - an accumulator's value grows by
+// (1 + growthRate) per surviving tick, so N ticks of growth is
+// (1 + growthRate)^N - 1. Lets a user target "cash out after ~N ticks"
+// directly instead of hand-computing a percentage that goes stale if
+// they change the growth rate later.
+function ticksToTakeProfitPct(growthRate, ticks) {
+  return Math.pow(1 + growthRate, ticks) - 1;
+}
+
 module.exports = {
   STRATEGY_NAME,
   getEntryDecision,
-  DEFAULT_ADX_MAX_ENTRY
+  DEFAULT_ADX_MAX_ENTRY,
+  ticksToTakeProfitPct
 };

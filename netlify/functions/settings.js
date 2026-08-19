@@ -125,6 +125,9 @@ exports.handler = async function (event) {
       if (body.accumulatorTakeProfitPct !== undefined && body.accumulatorTakeProfitPct >= 0.01 && body.accumulatorTakeProfitPct <= 1.0) {
         update.accumulatorTakeProfitPct = parseFloat(body.accumulatorTakeProfitPct);
       }
+      if (body.accumulatorTakeProfitTicks !== undefined && body.accumulatorTakeProfitTicks >= 0 && body.accumulatorTakeProfitTicks <= 20) {
+        update.accumulatorTakeProfitTicks = parseInt(body.accumulatorTakeProfitTicks);
+      }
       if (body.accumulatorAdxMaxEntry !== undefined && body.accumulatorAdxMaxEntry >= 5 && body.accumulatorAdxMaxEntry <= 50) {
         update.accumulatorAdxMaxEntry = parseInt(body.accumulatorAdxMaxEntry);
       }

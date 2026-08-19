@@ -757,6 +757,10 @@
           <input type="number" id="accumulatorTakeProfitInput" min="1" max="100" step="1" value="5">
         </div>
         <div>
+          <label>Target ticks (optional, overrides %)</label>
+          <input type="number" id="accumulatorTakeProfitTicksInput" min="0" max="20" step="1" value="0">
+        </div>
+        <div>
           <label>Max ADX to enter</label>
           <input type="number" id="accumulatorAdxMaxInput" min="5" max="50" value="20">
         </div>
@@ -765,7 +769,7 @@
           <input type="number" id="accumulatorMaxHoldInput" min="1" max="60" value="10">
         </div>
       </div>
-      <p class="settings-note" style="text-align:left;margin-top:6px;">Survival-focused: only enters when ADX reads calm/ranging (lower = safer), cashes out automatically once take-profit is hit, and force-sells as a backstop if a trade runs past the max hold time.</p>
+      <p class="settings-note" style="text-align:left;margin-top:6px;">Survival-focused: only enters when ADX reads calm/ranging (lower = safer), cashes out automatically once take-profit is hit, and force-sells as a backstop if a trade runs past the max hold time. Set target ticks instead of a flat percentage to cash out faster and more reliably, at the cost of a smaller win (0 = use the percentage field instead).</p>
     </div>
 
     <div id="evenOddSettings" style="display:none;">
@@ -1194,6 +1198,7 @@
     document.getElementById('classicModeFields').style.display = (settings.useAdaptiveRegime !== false) ? 'none' : 'block';
     document.getElementById('accumulatorGrowthRateInput').value = settings.accumulatorGrowthRate || 0.01;
     document.getElementById('accumulatorTakeProfitInput').value = Math.round((settings.accumulatorTakeProfitPct || 0.05) * 100);
+    document.getElementById('accumulatorTakeProfitTicksInput').value = settings.accumulatorTakeProfitTicks || 0;
     document.getElementById('accumulatorAdxMaxInput').value = settings.accumulatorAdxMaxEntry || 20;
     document.getElementById('accumulatorMaxHoldInput').value = settings.accumulatorMaxHoldMinutes || 10;
     document.getElementById('evenOddLookbackInput').value = settings.evenOddLookback || 20;
@@ -1449,6 +1454,7 @@
       biasThresholdPct: parseFloat(document.getElementById('biasThresholdInput').value),
       accumulatorGrowthRate: parseFloat(document.getElementById('accumulatorGrowthRateInput').value),
       accumulatorTakeProfitPct: parseInt(document.getElementById('accumulatorTakeProfitInput').value) / 100,
+      accumulatorTakeProfitTicks: parseInt(document.getElementById('accumulatorTakeProfitTicksInput').value) || 0,
       accumulatorAdxMaxEntry: parseInt(document.getElementById('accumulatorAdxMaxInput').value),
       accumulatorMaxHoldMinutes: parseInt(document.getElementById('accumulatorMaxHoldInput').value),
       evenOddLookback: parseInt(document.getElementById('evenOddLookbackInput').value),
