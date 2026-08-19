@@ -20,6 +20,7 @@
 const memory = require('./memory');
 const telegram = require('./telegram');
 const { validateStakeAmount, validateProfitGoal } = require('./settings');
+const supervisor = require('./supervisor-core');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -72,7 +73,15 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: 'ok' };
     }
 
-    await handleCommand(message.text.trim());
+    const text = message.text.trim();
+    if (text.startsWith('/')) {
+      await handleCommand(text);
+    } else {
+      // Not a slash command - the only thing free text can mean is an
+      // answer to a question the supervisor (telegram-supervisor.js)
+      // asked. If nothing is pending, it's just noise.
+      await handleFreeText(text);
+    }
     return { statusCode: 200, body: 'ok' };
   } catch (err) {
     console.log('telegram-webhook.js error:', err.message);
@@ -103,10 +112,42 @@ async function handleCommand(rawText) {
       return handleDailyGoal(args[0]);
     case '/weeklygoal':
       return handleWeeklyGoal(args[0]);
+    case '/ask':
+      return handleAsk(args.join(' '));
     case '/help':
       return handleHelp();
     default:
       return telegram.sendMessage(`Unknown command: ${command}\nSend /help for the list of commands.`);
+  }
+}
+
+// A message that isn't a /command - the only thing it can meaningfully
+// be is a reply to a question the supervisor asked. If nothing is
+// pending, say so rather than silently discarding it.
+async function handleFreeText(text) {
+  const result = await supervisor.answerPendingQuestion(text);
+  if (!result.handled) {
+    return telegram.sendMessage(
+      "I don't have a pending question to answer. Send /help for commands, or /ask <question> to ask me something."
+    );
+  }
+}
+
+// User-initiated call into the LLM supervisor - always calls through
+// (no skip-check, the user explicitly asked), and always replies:
+// the supervisor's system prompt instructs it to answer directly
+// rather than choosing "none" when the trigger is a user_ask.
+async function handleAsk(question) {
+  if (!question) {
+    return telegram.sendMessage('Usage: /ask <question>');
+  }
+  await memory.appendSupervisorConversation('user', question);
+  const result = await supervisor.runSupervisorCycle('user_ask', question);
+  if (result && result.skipped && result.reason === 'not_configured') {
+    return telegram.sendMessage("Supervisor isn't configured yet (missing ANTHROPIC_API_KEY).");
+  }
+  if (result && result.error) {
+    return telegram.sendMessage(`⚠ Supervisor couldn't answer: ${result.error}`);
   }
 }
 
@@ -183,18 +224,43 @@ async function handleStrategy(arg) {
 
 async function handleCallbackQuery(cq) {
   const data = cq.data || '';
-  if (!data.startsWith('strategy:')) {
-    return telegram.answerCallbackQuery(cq.id, '');
+
+  if (data.startsWith('strategy:')) {
+    const strategyName = data.slice('strategy:'.length);
+    const result = await switchStrategy(strategyName);
+    if (!result.ok) {
+      return telegram.answerCallbackQuery(cq.id, `❌ ${result.error}`);
+    }
+    await telegram.answerCallbackQuery(cq.id, `✅ Switched to ${STRATEGY_LABELS[strategyName] || strategyName}`);
+    return telegram.sendMessage(`✅ Strategy set to <b>${strategyName}</b> - takes effect on the next scheduled run.`);
   }
 
-  const strategyName = data.slice('strategy:'.length);
-  const result = await switchStrategy(strategyName);
-  if (!result.ok) {
-    return telegram.answerCallbackQuery(cq.id, `❌ ${result.error}`);
+  // A Yes/No tap on a change the supervisor proposed (supervisor-core.js).
+  // Approving re-validates against CURRENT settings and applies through
+  // the same memory.js writes every other Telegram command uses - the
+  // supervisor itself never writes settings without this human tap.
+  if (data.startsWith('approve:')) {
+    const id = data.slice('approve:'.length);
+    const result = await supervisor.applyPendingApproval(id);
+    if (!result.ok) {
+      await telegram.answerCallbackQuery(cq.id, result.alreadyResolved ? 'Already resolved.' : `❌ ${result.error || 'Could not apply.'}`);
+      return result.stale ? telegram.sendMessage(`❌ That proposal no longer applies: ${result.error}`) : undefined;
+    }
+    await telegram.answerCallbackQuery(cq.id, '✅ Applied');
+    return telegram.sendMessage(`✅ Applied: <b>${result.kind}</b> → ${result.value}`);
   }
 
-  await telegram.answerCallbackQuery(cq.id, `✅ Switched to ${STRATEGY_LABELS[strategyName] || strategyName}`);
-  return telegram.sendMessage(`✅ Strategy set to <b>${strategyName}</b> - takes effect on the next scheduled run.`);
+  if (data.startsWith('deny:')) {
+    const id = data.slice('deny:'.length);
+    const result = await supervisor.denyPendingApproval(id);
+    if (!result.ok) {
+      return telegram.answerCallbackQuery(cq.id, 'Already resolved.');
+    }
+    await telegram.answerCallbackQuery(cq.id, 'Discarded');
+    return telegram.sendMessage('❌ Proposal discarded.');
+  }
+
+  return telegram.answerCallbackQuery(cq.id, '');
 }
 
 async function handleStake(arg) {
@@ -258,6 +324,8 @@ async function handleHelp() {
     '/stake [amount] - view or change stake\n' +
     '/dailygoal [amount] - view or change daily profit goal\n' +
     '/weeklygoal [amount] - view or change weekly profit goal\n' +
-    '/help - this message'
+    '/ask <question> - ask the LLM supervisor anything about how the bot is doing\n' +
+    '/help - this message\n\n' +
+    'The supervisor also checks in on its own and may send a report, a question (reply in plain text to answer), or a proposed settings change (tap Approve/Deny).'
   );
 }
