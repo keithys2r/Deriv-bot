@@ -771,6 +771,31 @@
   var SETTINGS_URL = '/.netlify/functions/settings';
   var STATS_URL = '/.netlify/functions/stats';
 
+  // control.js and settings.js require this header - prompts once and
+  // remembers it in this browser so you don't have to re-enter it every
+  // load. Set the matching DASHBOARD_SECRET env var in Netlify.
+  var DASHBOARD_SECRET_KEY = 'bandzzbot_dashboard_secret';
+  function getDashboardSecret() {
+    var secret = localStorage.getItem(DASHBOARD_SECRET_KEY);
+    if (!secret) {
+      secret = window.prompt('Enter dashboard secret to control this bot:') || '';
+      if (secret) localStorage.setItem(DASHBOARD_SECRET_KEY, secret);
+    }
+    return secret;
+  }
+  function authedFetch(url, options) {
+    options = options || {};
+    options.headers = options.headers || {};
+    options.headers['X-Dashboard-Secret'] = getDashboardSecret();
+    return fetch(url, options).then(function(r) {
+      if (r.status === 401) {
+        localStorage.removeItem(DASHBOARD_SECRET_KEY);
+        alert('Dashboard secret rejected - reload the page and enter it again.');
+      }
+      return r;
+    });
+  }
+
   var currentSettings = null;
   var selectedStrategy = 'accumulator';
   var statsLoaded = false;
@@ -902,7 +927,7 @@
   function sendControl(action) {
     document.getElementById('startBtn').disabled = true;
     document.getElementById('stopBtn').disabled = true;
-    fetch(CONTROL_URL, {
+    authedFetch(CONTROL_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action })
@@ -974,7 +999,7 @@
   };
 
   function loadSettings() {
-    fetch(SETTINGS_URL)
+    authedFetch(SETTINGS_URL)
       .then(function(r) { return r.json(); })
       .then(function(data) {
         currentSettings = data.settings;
@@ -1236,7 +1261,7 @@
 
     note.textContent = 'Saving...';
 
-    fetch(SETTINGS_URL, {
+    authedFetch(SETTINGS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)

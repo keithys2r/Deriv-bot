@@ -5,6 +5,7 @@
 // NEXT scheduled run, not instantly.
 
 const memory = require('./memory');
+const { checkDashboardSecret } = require('./auth');
 
 const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ25V', '1HZ50V', '1HZ75V', '1HZ100V'];
 const ACCUMULATOR_GROWTH_RATES = [0.01, 0.02, 0.03, 0.04, 0.05]; // Deriv's allowed discrete growth rates
@@ -57,8 +58,17 @@ exports.handler = async function (event) {
       headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type'
+        'Access-Control-Allow-Headers': 'Content-Type, X-Dashboard-Secret'
       }
+    };
+  }
+
+  const auth = checkDashboardSecret(event);
+  if (!auth.ok) {
+    return {
+      statusCode: auth.statusCode,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ error: auth.error })
     };
   }
 

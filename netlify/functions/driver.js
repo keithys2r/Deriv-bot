@@ -469,10 +469,9 @@ async function pollActiveAccumulator(token, app_id, settings, active, strategyNa
   }
 
   if (status.isSold) {
-    // A knockout on an accumulator loses the full stake, so profit <= 0
-    // reliably distinguishes it from a take-profit sale (profit > 0).
-    const exitReason = status.profit > 0 ? 'take_profit' : 'knockout';
-    const tradeResult = { won: status.profit > 0, profit: status.profit };
+    const { won, profit } = wonFromStatus(status, active.stake);
+    const exitReason = won ? 'take_profit' : 'knockout';
+    const tradeResult = { won, profit };
     const updatedState = await recordAndLogTrade(STRATEGY_NAME, active.direction, active.symbol, active.stake, tradeResult, null, exitReason, Math.round(ageMs / 1000), 'accumulator');
     await handlePostTradeRisk(STRATEGY_NAME, updatedState);
     await maybeSendEODReport(STRATEGY_NAME);
@@ -485,7 +484,7 @@ async function pollActiveAccumulator(token, app_id, settings, active, strategyNa
 
   if (ageMs > maxHoldMs) {
     console.log(`Accumulator on ${active.symbol} exceeded max hold time (${(ageMs / 60000).toFixed(1)}m) - forcing sell.`);
-    const sellResult = await forceSellAndWait(token, app_id, active.contractId);
+    const sellResult = await forceSellAndWait(token, app_id, active.contractId, active.stake);
     if (sellResult.error) {
       console.log('Force-sell failed:', sellResult.error, '- will retry next run.');
       return respond({ message: 'Force-sell attempt failed, will retry next run', error: sellResult.error });
@@ -585,11 +584,10 @@ function pickHybridBucket(adx, accumulatorCeiling) {
 // size right up until risk.js's cooldown cuts it to zero), and signal
 // confidence (no current strategy produces a confidence score - kept as
 // an optional no-op hook for a future one that does). All three are
-// <= 1.0 and multiply together, so the
-// combined result can never exceed baseStake - and since baseStake itself
-// is settings.stakeAmount, already clamped to <= 20% of dailyStopLoss by
-// both driver.js's handler and settings.js's validateStakeAmount, scaling
-// can never push a trade's risk above that clamp either.
+// <= 1.0 and multiply together, so the scaled-down result can never
+// exceed baseStake. The $0.35 floor below is clamped to the 20%-of-
+// dailyStopLoss safety limit too, so a very low dailyStopLoss can't let
+// the floor push a trade above that limit.
 async function getScaledStake(strategyName, settings, confidence) {
   const baseStake = parseFloat(settings.stakeAmount || 1);
 
@@ -616,7 +614,12 @@ async function getScaledStake(strategyName, settings, confidence) {
     // fraction), so this MUST be rounded before being sent as a trade
     // price, not just for display. Round after the $0.35 floor so the
     // floor itself can't get nudged back under by rounding.
-    const scaledStake = Math.round(Math.max(0.35, baseStake * combinedFactor) * 100) / 100;
+    const maxSafeStake = settings.dailyStopLoss > 0 ? settings.dailyStopLoss * 0.2 : baseStake;
+    const floor = Math.min(0.35, maxSafeStake);
+    if (floor < 0.35) {
+      console.log(`Stake floor reduced from $0.35 to $${floor.toFixed(2)} to respect the 20%-of-dailyStopLoss safety clamp (dailyStopLoss=$${settings.dailyStopLoss}).`);
+    }
+    const scaledStake = Math.round(Math.max(floor, baseStake * combinedFactor) * 100) / 100;
     console.log(`Stake scaled: weekly=${weeklyFactor.toFixed(2)} (${weeklyProfitGoal ? (weeklyNet / weeklyProfitGoal * 100).toFixed(0) + '%' : 'n/a'}) losingStreak=${losingStreakFactor.toFixed(2)} (${state.consecutiveLosses || 0} losses) confidence=${confidenceFactor.toFixed(2)} -> $${baseStake} to $${scaledStake.toFixed(2)}`);
     return scaledStake;
   }
@@ -897,11 +900,13 @@ async function reconcileOrphanedDigitDifferBatch(token, app_id, strategyName, ac
     return;
   }
 
+  let wonCount = 0;
   for (let i = 0; i < statuses.length; i++) {
-    const status = statuses[i];
-    await recordAndLogTrade(strategyName, `DIFF≠${active.digits[i]}`, active.symbol, active.stake, { won: status.profit > 0, profit: status.profit }, null, null, undefined, 'digit_differ');
+    const { won, profit } = wonFromStatus(statuses[i], active.stake);
+    if (won) wonCount++;
+    await recordAndLogTrade(strategyName, `DIFF≠${active.digits[i]}`, active.symbol, active.stake, { won, profit }, null, null, undefined, 'digit_differ');
   }
-  console.log(`Recovered orphaned digit-differ batch: ${statuses.filter((s) => s.profit > 0).length}/${statuses.length} won`);
+  console.log(`Recovered orphaned digit-differ batch: ${wonCount}/${statuses.length} won`);
 }
 
 function respond(body) {
@@ -1060,20 +1065,22 @@ function connectAndGetTicksForSymbols(wsUrl, symbols, count) {
     }, 8000);
 
     ws.onopen = () => {
-      symbols.forEach((symbol) => {
+      symbols.forEach((symbol, i) => {
         ws.send(JSON.stringify({
           ticks_history: symbol,
           style: 'ticks',
           count: count,
           end: 'latest',
-          req_id: symbol
+          req_id: i
         }));
       });
     };
 
     ws.onmessage = (event) => {
       const res = JSON.parse(event.data);
-      const symbol = res.req_id;
+      const i = res.req_id;
+      if (i === undefined || i === null) return; // unrelated message
+      const symbol = symbols[i];
       if (!symbol || results[symbol] !== undefined) return; // already resolved or unrelated message
 
       if (res.error) {
@@ -1158,6 +1165,21 @@ function resolveSettledContract(contract, stake) {
     }
   }
   return { won, profit, contractId: contract.contract_id, buyPrice: contract.buy_price, sellPrice: contract.sell_price };
+}
+
+// Same "trust status over a possibly-unusable profit read" logic as
+// resolveSettledContract above, but for the { isSold, profit, status }
+// shape queryContractStatus returns - kept in sync so the same profit>0
+// edge case (a 0/NaN profit read on an actual win getting misread as a
+// loss) doesn't stay live on the accumulator/force-sell/orphan-recovery
+// paths that all go through queryContractStatus instead of a raw buy response.
+function wonFromStatus(status, stake) {
+  const won = status.status ? status.status === 'won' : status.profit > 0;
+  let profit = status.profit;
+  if (!Number.isFinite(profit)) {
+    profit = won ? 0 : -stake;
+  }
+  return { won, profit };
 }
 
 // Places N Digit Differ contracts (one per excluded digit) over a
@@ -1386,7 +1408,7 @@ function sendSellRequest(wsUrl, contractId) {
 // queries its final settled profit in a separate connection - each OTP
 // WebSocket URL is single-use, same reason every other WS action in this
 // file re-authenticates before opening a new connection.
-async function forceSellAndWait(token, app_id, contractId) {
+async function forceSellAndWait(token, app_id, contractId, stake) {
   const sellAuth = await getOtpWebSocketUrl(token, app_id);
   const sellResult = await sendSellRequest(sellAuth.wsUrl, contractId);
   if (sellResult.error) return { error: sellResult.error };
@@ -1404,7 +1426,7 @@ async function forceSellAndWait(token, app_id, contractId) {
     if (!status.isSold) {
       return { error: 'Sell confirmed but outcome not yet confirmable - will retry next run' };
     }
-    return { won: status.profit > 0, profit: status.profit };
+    return wonFromStatus(status, stake);
   } catch (err) {
     return { error: err.message };
   }
