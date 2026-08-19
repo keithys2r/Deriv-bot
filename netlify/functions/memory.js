@@ -1,7 +1,7 @@
 // memory.js
 // Handles saving/loading bot state (P&L, win rate, losses, pause state)
 // Uses Netlify Blobs so data survives function restarts.
-// Each strategy gets its own memory "slot" so Accumulator and Rise/Fall don't mix.
+// Each strategy gets its own memory "slot" (accumulator/digit_differ/hybrid) so switching between them doesn't mix up stats.
 
 const { getStore } = require('@netlify/blobs');
 
@@ -256,7 +256,14 @@ async function loadSettings() {
 
 async function saveSettings(newSettings) {
   const store = getMemoryStore();
-  const current = await loadSettings();
+  // Read-modify-write is not atomic (no compare-and-swap in the installed
+  // @netlify/blobs client - see acquireLock's comment for the same gap).
+  // A strong-consistency read here at least avoids merging against a
+  // stale cached value, which narrows (but doesn't eliminate) the window
+  // for two concurrent saves (e.g. dashboard vs. Telegram) to silently
+  // drop one of their changes.
+  const existing = await store.get(SETTINGS_KEY, { type: 'json', consistency: 'strong' });
+  const current = Object.assign({}, defaultSettings(), existing || {});
   const merged = Object.assign({}, current, newSettings);
   await store.setJSON(SETTINGS_KEY, merged);
   return merged;
