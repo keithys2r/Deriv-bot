@@ -10,11 +10,19 @@ const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ
 const ACCUMULATOR_GROWTH_RATES = [0.01, 0.02, 0.03, 0.04, 0.05]; // Deriv's allowed discrete growth rates
 const VALID_STRATEGIES = ['accumulator', 'digit_differ', 'hybrid'];
 
+// Strips anything that isn't a digit/dot/minus before parsing - a
+// Telegram user copy-pasting the "/stake <amount>" placeholder text
+// literally (angle brackets and all) or typing "$200" should still
+// parse as a number instead of silently failing as NaN.
+function stripToNumeric(raw) {
+  return String(raw).replace(/[^0-9.-]/g, '');
+}
+
 // Shared with telegram-webhook.js, so a stake change via Telegram is
 // held to exactly the same 20%-of-stop-loss rule as one made from the
 // dashboard, instead of two copies of this rule silently drifting apart.
 function validateStakeAmount(rawStake, dailyStopLoss) {
-  const stake = parseFloat(rawStake);
+  const stake = parseFloat(stripToNumeric(rawStake));
   if (!Number.isFinite(stake) || stake <= 0) {
     return { ok: false, error: 'Stake must be greater than 0' };
   }
@@ -31,7 +39,7 @@ function validateStakeAmount(rawStake, dailyStopLoss) {
 // Shared with telegram-webhook.js, so /dailygoal and /weeklygoal are
 // held to the same rule (just "greater than 0") as a dashboard edit.
 function validateProfitGoal(rawGoal) {
-  const goal = parseFloat(rawGoal);
+  const goal = parseFloat(stripToNumeric(rawGoal));
   if (!Number.isFinite(goal) || goal <= 0) {
     return { ok: false, error: 'Goal must be greater than 0' };
   }
