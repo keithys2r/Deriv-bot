@@ -51,29 +51,46 @@ async function getOtpWebSocketUrl(token, app_id, preferDemo = true) {
   // setting an env var, not just a function argument somewhere changing.
   const effectivePreferDemo = isLiveTradingAllowed() ? preferDemo : true;
 
-  const accountsRes = await fetchWithRetry(`${API_BASE}/trading/v1/options/accounts`, {
-    headers: {
-      'Deriv-App-ID': app_id,
-      'Authorization': `Bearer ${token}`
+  // A 200 response with an empty accounts array has been observed as a
+  // transient Deriv-side hiccup (not a genuine "you have no accounts"
+  // answer) - fetchWithRetry above only retries on a network/timeout
+  // failure, since a 200 is fetch() succeeding, so that gap needs its
+  // own short retry here rather than failing the whole run on one flaky read.
+  let accounts;
+  let lastEmptyAccountsData;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    const accountsRes = await fetchWithRetry(`${API_BASE}/trading/v1/options/accounts`, {
+      headers: {
+        'Deriv-App-ID': app_id,
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const accountsRawText = await accountsRes.text();
+
+    let accountsData;
+    try {
+      accountsData = JSON.parse(accountsRawText);
+    } catch (e) {
+      throw new Error(`Accounts endpoint returned non-JSON (status ${accountsRes.status}): ${accountsRawText.slice(0, 200)}`);
     }
-  });
 
-  const accountsRawText = await accountsRes.text();
+    if (!accountsRes.ok) {
+      throw new Error('Accounts fetch failed: ' + JSON.stringify(accountsData.errors || accountsData));
+    }
 
-  let accountsData;
-  try {
-    accountsData = JSON.parse(accountsRawText);
-  } catch (e) {
-    throw new Error(`Accounts endpoint returned non-JSON (status ${accountsRes.status}): ${accountsRawText.slice(0, 200)}`);
+    accounts = accountsData.data || accountsData.accounts || [];
+    if (accounts.length) break;
+
+    lastEmptyAccountsData = accountsData;
+    if (attempt < RETRY_DELAYS_MS.length) {
+      console.log(`Deriv returned an empty accounts list (attempt ${attempt + 1}), retrying in ${RETRY_DELAYS_MS[attempt]}ms...`);
+      await sleep(RETRY_DELAYS_MS[attempt]);
+    }
   }
 
-  if (!accountsRes.ok) {
-    throw new Error('Accounts fetch failed: ' + JSON.stringify(accountsData.errors || accountsData));
-  }
-
-  const accounts = accountsData.data || accountsData.accounts || [];
   if (!accounts.length) {
-    throw new Error('No accounts returned from Deriv: ' + JSON.stringify(accountsData));
+    throw new Error('No accounts returned from Deriv: ' + JSON.stringify(lastEmptyAccountsData));
   }
 
   const targetAccount = effectivePreferDemo
