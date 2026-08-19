@@ -913,8 +913,25 @@ function queryContractStatus(wsUrl, contractId) {
           return;
         }
         const rawProfit = contract.profit;
-        const profit = Number.isFinite(rawProfit) ? rawProfit : 0;
-        resolve({ isSold: !!contract.is_sold, profit });
+        const computedProfit = Number.isFinite(rawProfit) ? rawProfit : (contract.sell_price - contract.buy_price);
+        if (contract.is_sold && !Number.isFinite(computedProfit)) {
+          // Deriv marked it sold but neither profit nor sell_price/buy_price
+          // is usable yet - a real win was once silently recorded as a $0
+          // loss here because of this exact gap. Don't guess: report as
+          // still-open so the next scheduled poll (60s later) tries again
+          // with data Deriv has had time to finalize, instead of ever
+          // writing a fabricated outcome into P&L/risk tracking.
+          console.log(`WARNING: contract ${contractId} is_sold=true but profit/sell_price unusable - treating as unresolved, will retry next poll.`);
+          resolve({ isSold: false, profit: 0 });
+          return;
+        }
+        resolve({
+          isSold: !!contract.is_sold,
+          profit: computedProfit,
+          buyPrice: contract.buy_price,
+          sellPrice: contract.sell_price,
+          status: contract.status
+        });
       }
     };
 
@@ -1451,6 +1468,16 @@ async function forceSellAndWait(token, app_id, contractId) {
   try {
     const statusAuth = await getOtpWebSocketUrl(token, app_id);
     const status = await queryContractStatus(statusAuth.wsUrl, contractId);
+    // The contract was just explicitly sold above, so it IS genuinely
+    // closed on Deriv's side even if this status query itself couldn't
+    // confirm the outcome yet (queryContractStatus reports that case as
+    // isSold: false - see its own comment). Trusting status.profit
+    // directly here would resolve won: false, profit: NaN on that gap -
+    // return an error instead so the caller's existing "will retry next
+    // run" handling re-queries rather than recording a fabricated result.
+    if (!status.isSold) {
+      return { error: 'Sell confirmed but outcome not yet confirmable - will retry next run' };
+    }
     return { won: status.profit > 0, profit: status.profit };
   } catch (err) {
     return { error: err.message };
