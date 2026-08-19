@@ -121,3 +121,21 @@ netlify deploy --prod     # deploy (deploys are otherwise handled by Netlify's g
 
 ### Frontend
 `frontend/index.html` is a single self-contained static file (inline CSS/JS, no framework, no build step) that polls the on-demand functions (`status`, `balance`, `stats`) and posts to `control`/`settings`. Deployed as-is via `netlify.toml`'s `publish = "frontend"`.
+
+## Development workflow
+
+No CI — every one of these checks is manual, every time, before anything reaches `main`. Skipping a step is exactly how the `fetchCandlesForSymbol` regression (a shared function accidentally deleted along with an unrelated code block) reached production.
+
+1. **Branch.** Create a feature branch off `main` — never commit directly to `main`.
+2. **Change.** Make the edit.
+3. **Verify, before committing:**
+   - `node --check <every changed .js file>` — catches syntax errors instantly, costs nothing.
+   - If `frontend/index.html` changed: extract the `<script>` block and run it through `new Function()` to catch JS syntax errors the browser would otherwise be the first to find.
+   - `npm test` — must show only new passes, zero failures, and the same or higher total count as before the change (a lower count usually means a test file broke silently, e.g. a bad merge).
+   - **After any large deletion or refactor** (moving code between files, bulk-removing a feature): grep for every top-level function definition before and after, and diff the two lists by hand. A bulk delete can silently sweep up a shared function that happened to sit inside the deleted range — `node --check` and `npm test` will NOT catch a function that's simply missing if nothing in the test suite exercises that code path (most of `driver.js` has no test coverage — see Commands above).
+4. **Commit** on the feature branch with a message that explains *why*, not just *what*.
+5. **Merge to `main`:** `git fetch origin main` → `git checkout main` → `git merge origin/main --ff-only` → `git merge <feature-branch> --no-ff` (never squash, keep the branch's history visible).
+6. **Re-verify on the merged result** — repeat step 3's checks *after* merging, not just before. A merge can reintroduce a conflict resolution mistake that neither branch had alone.
+7. **Push** (`git push origin main`) — Netlify's git integration deploys automatically on push, there is no separate manual deploy step.
+8. **Delete the local feature branch** once merged and pushed.
+9. **Watch it live.** Anything touching `driver.js`, `memory.js`, or the Deriv WS/REST calls has zero automated coverage (see Commands above) — the only real verification is `netlify dev` against a **DEMO** token, or watching the actual Netlify function logs after deploy for the next few scheduled runs. Don't consider a change to that code "done" until it's been observed actually running clean live, not just merged.
