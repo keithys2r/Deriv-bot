@@ -17,27 +17,60 @@ const EMOJI_STOP = '\u{1F6D1}';        // 🛑
 const EMOJI_CHART = '\u{1F4CA}';       // 📊
 
 // Low-level sender. Every alert function below calls this.
-async function sendMessage(text) {
+// replyMarkup is optional - pass a Telegram reply_markup object (e.g.
+// { inline_keyboard: [[...]] }) to attach tappable buttons.
+async function sendMessage(text, replyMarkup) {
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
     console.log('Telegram not configured, skipping alert:', text);
     return { skipped: true };
   }
 
   const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+  const body = {
+    chat_id: TELEGRAM_CHAT_ID,
+    text: text,
+    parse_mode: 'HTML'
+  };
+  if (replyMarkup) {
+    body.reply_markup = replyMarkup;
+  }
 
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: text,
-        parse_mode: 'HTML'
-      })
+      body: JSON.stringify(body)
     });
     const data = await response.json();
     if (!data.ok) {
       console.log('Telegram send failed:', data.description);
+    }
+    return data;
+  } catch (err) {
+    console.log('Telegram error:', err.message);
+    return { error: err.message };
+  }
+}
+
+// Acknowledges a tapped inline-keyboard button. Telegram requires this
+// call or the button shows a loading spinner on the user's client
+// indefinitely - it's not optional cleanup, it's part of the flow.
+async function answerCallbackQuery(callbackQueryId, text) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
+    return { skipped: true };
+  }
+
+  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_query_id: callbackQueryId, text })
+    });
+    const data = await response.json();
+    if (!data.ok) {
+      console.log('Telegram answerCallbackQuery failed:', data.description);
     }
     return data;
   } catch (err) {
@@ -96,6 +129,7 @@ async function alertTradeResult(strategyName, direction, symbol, stake, won, pro
 
 module.exports = {
   sendMessage,
+  answerCallbackQuery,
   alertBotStarted,
   alertPaused,
   alertDailyGoalHit,
