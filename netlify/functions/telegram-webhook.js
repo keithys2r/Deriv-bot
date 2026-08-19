@@ -201,7 +201,7 @@ async function handleStake(arg) {
   const settings = await memory.loadSettings();
 
   if (!arg) {
-    return telegram.sendMessage(`Current stake: $${settings.stakeAmount}\nSend /stake &lt;amount&gt; to change it.`);
+    return telegram.sendMessage(`Current stake: $${settings.stakeAmount}\nSend /stake followed by a number to change it, e.g. /stake 5`);
   }
 
   const validated = validateStakeAmount(arg, settings.dailyStopLoss);
@@ -218,7 +218,7 @@ async function handleDailyGoal(arg) {
   const settings = await memory.loadSettings();
 
   if (!arg) {
-    return telegram.sendMessage(`Current daily profit goal: $${settings.dailyProfitGoal}\nSend /dailygoal &lt;amount&gt; to change it.`);
+    return telegram.sendMessage(`Current daily profit goal: $${settings.dailyProfitGoal}\nSend /dailygoal followed by a number to change it, e.g. /dailygoal 20`);
   }
 
   const validated = validateProfitGoal(arg);
@@ -235,7 +235,7 @@ async function handleWeeklyGoal(arg) {
   const settings = await memory.loadSettings();
 
   if (!arg) {
-    return telegram.sendMessage(`Current weekly profit goal: $${settings.weeklyProfitGoal}\nSend /weeklygoal &lt;amount&gt; to change it.`);
+    return telegram.sendMessage(`Current weekly profit goal: $${settings.weeklyProfitGoal}\nSend /weeklygoal followed by a number to change it, e.g. /weeklygoal 100`);
   }
 
   const validated = validateProfitGoal(arg);
