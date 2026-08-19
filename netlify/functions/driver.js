@@ -43,6 +43,7 @@ const { getOtpWebSocketUrl } = require('./deriv-auth');
 
 // ---- Config ----
 const EOD_HOUR_UTC = 23;
+const ALL_STRATEGY_NAMES = ['accumulator', 'digit_differ', 'hybrid'];
 // -----------------
 
 exports.handler = async function () {
@@ -80,13 +81,28 @@ exports.handler = async function () {
     // 'accumulator' this only handles the pre-buy "no contract ID yet"
     // crash window - once a contract ID exists, reconcileOrphanedTrade
     // deliberately leaves it for runAccumulatorStrategy's own poll loop
-    // to resolve (see the strategyName check inside it).
-    await reconcileOrphanedTrade(token, app_id, strategyName);
+    // to resolve (see the shape check inside it).
+    await reconcileOrphanedTrade(token, app_id, strategyName, settings, true);
+
+    // A trade can be left open under a bucket that ISN'T the active
+    // strategy (e.g. the user switched activeStrategy in the dashboard
+    // while a trade was still open) - nothing else ever visits that
+    // bucket again otherwise, since only the active strategy's run*
+    // function gets dispatched below. Check the other two each run too.
+    for (const otherStrategy of ALL_STRATEGY_NAMES) {
+      if (otherStrategy !== strategyName) {
+        await reconcileOrphanedTrade(token, app_id, otherStrategy, settings, false);
+      }
+    }
 
     // Safety net: never let a single trade risk more than 20% of the
-    // daily stop loss, regardless of what got saved.
-    const maxSafeStake = settings.dailyStopLoss * 0.2;
-    if (settings.stakeAmount > maxSafeStake) {
+    // daily stop loss, regardless of what got saved. Guard against a
+    // missing/zero dailyStopLoss making maxSafeStake NaN, which would
+    // make the clamp check below silently never fire.
+    const maxSafeStake = settings.dailyStopLoss > 0 ? settings.dailyStopLoss * 0.2 : 0;
+    if (!(settings.dailyStopLoss > 0)) {
+      console.log(`WARNING: settings.dailyStopLoss is missing/zero - stake safety clamp cannot be checked this run.`);
+    } else if (settings.stakeAmount > maxSafeStake) {
       console.log(`Stake $${settings.stakeAmount} exceeds safe max $${maxSafeStake}, clamping.`);
       await memory.appendLog(strategyName, `Stake clamped from $${settings.stakeAmount} to $${maxSafeStake.toFixed(2)} (safety limit)`, 'pause');
       settings.stakeAmount = maxSafeStake;
@@ -116,15 +132,24 @@ exports.handler = async function () {
     // failing forever with nobody finding out except by reading logs.
     const state = await memory.recordApiFailure(strategyName);
     if (state.consecutiveApiFailures >= memory.API_FAILURE_KILL_SWITCH) {
+      const shouldAlert = !state.killSwitchAlertSent;
       if (!state.manualPause) {
         state.manualPause = true;
         console.log(`Kill switch tripped: ${state.consecutiveApiFailures} consecutive failures - auto-pausing ${strategyName}.`);
       }
-      if (!state.killSwitchAlertSent) {
-        state.killSwitchAlertSent = true;
-        await telegram.alertPaused(strategyName, `Auto-paused after ${state.consecutiveApiFailures} consecutive API failures - hit Start once things look healthy again.`);
-      }
+      state.killSwitchAlertSent = true;
+      // Persist the pause/alert-sent flags BEFORE attempting the alert
+      // itself - telegram.js's own send function already swallows its
+      // own errors, but this way a future change to it throwing can
+      // never skip persisting the pause.
       await memory.saveState(strategyName, state);
+      if (shouldAlert) {
+        try {
+          await telegram.alertPaused(strategyName, `Auto-paused after ${state.consecutiveApiFailures} consecutive API failures - hit Start once things look healthy again.`);
+        } catch (alertErr) {
+          console.log('Kill-switch Telegram alert failed:', alertErr.message);
+        }
+      }
     }
 
     return respond({ message: 'Error: ' + err.message });
@@ -213,7 +238,10 @@ async function runAccumulatorStrategy(token, app_id, settings, strategyName) {
 
   const adxMaxEntry = settings.accumulatorAdxMaxEntry ?? accumulatorStrategy.DEFAULT_ADX_MAX_ENTRY;
   const adxPeriod = settings.adxPeriod || 14;
-  const neededCandles = adxPeriod * 2 + 21; // calculateADX needs period*2+1 candles
+  const neededCandles = adxPeriod * 2 + 5; // calculateADX needs period*2+1 candles - +5 is
+                                            // just a small cushion for tick-bucketing edge
+                                            // effects, not the +21 leftover from the removed
+                                            // rise_fall strategy's EMA warmup requirement
   const granularitySeconds = settings.candleGranularitySeconds || 15;
 
   let symbol, adx, decisionReason;
@@ -376,16 +404,24 @@ async function runDigitDifferStrategy(token, app_id, settings, strategyName) {
   });
 
   const tradeAuth = await getOtpWebSocketUrl(token, app_id);
+  const persistPromises = [];
   const results = await placeDigitDifferBatchAndWait(tradeAuth.wsUrl, bets, (i, contractId) => {
     // Fires as soon as EACH buy confirms, before any of them settle -
     // persist contract IDs incrementally so a mid-batch crash leaves
     // enough info for reconciliation instead of an untraceable orphan.
-    memory.getActiveTrade(STRATEGY_NAME).then((active) => {
+    persistPromises.push(memory.getActiveTrade(STRATEGY_NAME).then((active) => {
       if (!active) return;
       active.contractIds[i] = contractId;
       return memory.setActiveTrade(STRATEGY_NAME, active);
-    }).catch((e) => console.log('Failed to persist digit-differ contract ID:', e.message));
+    }).catch((e) => console.log('Failed to persist digit-differ contract ID:', e.message)));
   });
+
+  // Wait for every incremental contract-ID persist to actually land before
+  // we touch the marker ourselves below - otherwise a slow write here
+  // could land AFTER our own clearActiveTrade/setActiveTrade call and
+  // resurrect a marker for a batch that's already been fully recorded,
+  // leading reconcileOrphanedDigitDifferBatch to double-record it later.
+  await Promise.allSettled(persistPromises);
 
   // placeDigitDifferBatchAndWait's own 20s timeout RESOLVES (never rejects)
   // for any bet that was bought but hasn't settled yet - those are real
@@ -530,7 +566,10 @@ async function runHybridStrategy(token, app_id, settings) {
 
   const symbol = settings.symbol;
   const adxPeriod = settings.adxPeriod || 14;
-  const neededCandles = adxPeriod * 2 + 21; // calculateADX needs period*2+1 candles
+  const neededCandles = adxPeriod * 2 + 5; // calculateADX needs period*2+1 candles - +5 is
+                                            // just a small cushion for tick-bucketing edge
+                                            // effects, not the +21 leftover from the removed
+                                            // rise_fall strategy's EMA warmup requirement
   const granularitySeconds = settings.candleGranularitySeconds || 15;
 
   let adx;
@@ -796,6 +835,7 @@ function queryContractStatus(wsUrl, contractId) {
       clearTimeout(timeout);
       if (!resolved) {
         resolved = true;
+        try { ws.close(); } catch (e) {}
         reject(new Error('WS Error: ' + err.message));
       }
     };
@@ -806,25 +846,29 @@ function queryContractStatus(wsUrl, contractId) {
 // active trade marker; if one exists with a contract ID and has had
 // enough time to settle, queries Deriv directly for what actually
 // happened and records the REAL outcome instead of losing it silently.
-async function reconcileOrphanedTrade(token, app_id, strategyName) {
+async function reconcileOrphanedTrade(token, app_id, strategyName, settings, isActiveStrategy) {
   const active = await memory.getActiveTrade(strategyName);
   if (!active) return;
 
   const ageMs = Date.now() - new Date(active.placedAt).getTime();
 
-  // Accumulators poll their own open contract as a normal part of every
-  // run (see pollActiveAccumulator), including exit-reason classification
-  // (take-profit vs knockout vs timeout) this generic path doesn't know
-  // how to do. Leave a contract-ID'd accumulator trade alone here
-  // entirely, so the two paths can't race to record the same settled
-  // trade - runAccumulatorStrategy always resolves it. Checked two ways:
-  // strategyName itself is 'accumulator' for the pure strategy, but
-  // hybrid mode can ALSO have an open accumulator-style trade under the
-  // 'hybrid' bucket - active.growthRate is only ever set by an
-  // accumulator buy, so its presence is a reliable shape check regardless
-  // of which bucket the trade is filed under.
-  if (strategyName === 'accumulator' || active.growthRate !== undefined) {
-    return;
+  // active.growthRate is only ever set by an accumulator buy, so its
+  // presence is a reliable shape check regardless of which bucket the
+  // trade is filed under (hybrid mode can file an accumulator-shaped
+  // trade under the 'hybrid' bucket too).
+  if (active.growthRate !== undefined) {
+    if (isActiveStrategy) {
+      // Accumulators poll their own open contract as a normal part of
+      // every run this strategy is dispatched (see pollActiveAccumulator)
+      // - leave it alone here so the two paths can't race to record the
+      // same settled trade.
+      return;
+    }
+    // This bucket is NOT the one running this invocation (e.g. the user
+    // switched activeStrategy away while a trade was still open) - no
+    // other code path will ever poll it, so do it directly here instead
+    // of leaving the contract open on Deriv untracked forever.
+    return await pollActiveAccumulator(token, app_id, settings, active, strategyName);
   }
 
   // digit_differ places multiple contracts atomically within one
@@ -984,6 +1028,7 @@ function connectAndGetNativeCandles(wsUrl, symbol, count) {
       clearTimeout(timeout);
       if (!resolved) {
         resolved = true;
+        try { ws.close(); } catch (e) {}
         reject(new Error('WS Error: ' + err.message));
       }
     };
@@ -1037,6 +1082,7 @@ function connectAndGetTicksForCandles(wsUrl, symbol, count) {
       clearTimeout(timeout);
       if (!resolved) {
         resolved = true;
+        try { ws.close(); } catch (e) {}
         reject(new Error('WS Error: ' + err.message));
       }
     };
@@ -1053,7 +1099,11 @@ function connectAndGetTicksForSymbols(wsUrl, symbols, count) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     let resolved = false;
-    const results = {}; // symbol -> { prices, times } | null (per-symbol error)
+    // Indexed by request index, not symbol - a duplicate symbol in the
+    // watchlist would otherwise get its second response silently dropped
+    // by a symbol-keyed "already resolved" check without ever
+    // decrementing `remaining`, deadlocking the whole batch until timeout.
+    const resultsByIndex = new Array(symbols.length).fill(undefined);
     let remaining = symbols.length;
 
     const timeout = setTimeout(() => {
@@ -1079,16 +1129,15 @@ function connectAndGetTicksForSymbols(wsUrl, symbols, count) {
     ws.onmessage = (event) => {
       const res = JSON.parse(event.data);
       const i = res.req_id;
-      if (i === undefined || i === null) return; // unrelated message
-      const symbol = symbols[i];
-      if (!symbol || results[symbol] !== undefined) return; // already resolved or unrelated message
+      if (i === undefined || i === null || i < 0 || i >= symbols.length) return; // unrelated message
+      if (resultsByIndex[i] !== undefined) return; // already resolved this index
 
       if (res.error) {
-        results[symbol] = null;
+        resultsByIndex[i] = null;
         remaining--;
       } else if (res.msg_type === 'history') {
         const history = res.history || (res.data && res.data.history) || {};
-        results[symbol] = { prices: history.prices || [], times: history.times || [] };
+        resultsByIndex[i] = { prices: history.prices || [], times: history.times || [] };
         remaining--;
       }
 
@@ -1096,6 +1145,10 @@ function connectAndGetTicksForSymbols(wsUrl, symbols, count) {
         clearTimeout(timeout);
         resolved = true;
         ws.close();
+        const results = {}; // symbol -> { prices, times } | null (per-symbol error)
+        symbols.forEach((symbol, idx) => {
+          if (results[symbol] === undefined) results[symbol] = resultsByIndex[idx];
+        });
         resolve(results);
       }
     };
@@ -1104,6 +1157,7 @@ function connectAndGetTicksForSymbols(wsUrl, symbols, count) {
       clearTimeout(timeout);
       if (!resolved) {
         resolved = true;
+        try { ws.close(); } catch (e) {}
         reject(new Error('WS Error: ' + err.message));
       }
     };
@@ -1288,6 +1342,7 @@ function placeDigitDifferBatchAndWait(wsUrl, bets, onEachBought) {
       if (!resolved) {
         clearTimeout(timeout);
         resolved = true;
+        try { ws.close(); } catch (e) {}
         for (let i = 0; i < bets.length; i++) {
           if (!results[i]) results[i] = { error: 'WS Error: ' + err.message, contractPlaced: !!contractIds[i], contractId: contractIds[i] };
         }
@@ -1348,6 +1403,7 @@ function placeAccumulatorAndReturn(wsUrl, parameters, stake) {
       clearTimeout(timeout);
       if (!resolved) {
         resolved = true;
+        try { ws.close(); } catch (e) {}
         resolve({ error: 'WS Error: ' + err.message, definitelyNotPlaced: false });
       }
     };
@@ -1398,6 +1454,7 @@ function sendSellRequest(wsUrl, contractId) {
       clearTimeout(timeout);
       if (!resolved) {
         resolved = true;
+        try { ws.close(); } catch (e) {}
         resolve({ error: 'WS Error: ' + err.message });
       }
     };

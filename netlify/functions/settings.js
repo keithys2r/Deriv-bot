@@ -107,13 +107,13 @@ exports.handler = async function (event) {
         const validated = validateProfitGoal(body.weeklyProfitGoal);
         if (validated.ok) update.weeklyProfitGoal = validated.value;
       }
-      if (body.dailyStopLoss && body.dailyStopLoss > 0) {
+      if (body.dailyStopLoss && body.dailyStopLoss > 0 && body.dailyStopLoss <= 100000) {
         update.dailyStopLoss = parseFloat(body.dailyStopLoss);
       }
-      if (body.maxConsecutiveLosses && body.maxConsecutiveLosses >= 1) {
+      if (body.maxConsecutiveLosses && body.maxConsecutiveLosses >= 1 && body.maxConsecutiveLosses <= 20) {
         update.maxConsecutiveLosses = parseInt(body.maxConsecutiveLosses);
       }
-      if (body.cooldownMinutes && body.cooldownMinutes >= 1) {
+      if (body.cooldownMinutes && body.cooldownMinutes >= 1 && body.cooldownMinutes <= 1440) {
         update.cooldownMinutes = parseInt(body.cooldownMinutes);
       }
       if (typeof body.cooldownEnabled === 'boolean') update.cooldownEnabled = body.cooldownEnabled;

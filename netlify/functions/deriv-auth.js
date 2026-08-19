@@ -34,16 +34,28 @@ function fetchWithTimeout(url, options) {
   return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
 }
 
+// A 502/503/504/429 is Deriv's edge/proxy failing, not Deriv actually
+// answering with a rejection - worth one retry, unlike a genuine 4xx
+// business-rule response (bad token, invalid account, etc.) which won't
+// change no matter how many times it's retried.
+const TRANSIENT_STATUS_CODES = new Set([429, 502, 503, 504]);
+
 // Retries fetchWithTimeout on a network/timeout failure (fetch() itself
-// throwing - abort, DNS, connection reset) with a short delay between
-// attempts. Does NOT retry a response that came back with a real HTTP
-// status - that's Deriv actually answering, just with a rejection, and
+// throwing - abort, DNS, connection reset) OR a transient HTTP status,
+// with a short delay between attempts. Does NOT retry any other non-2xx
+// response - that's Deriv actually answering, just with a rejection, and
 // hammering it again won't change the answer.
 async function fetchWithRetry(url, options) {
   let lastErr;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     try {
-      return await fetchWithTimeout(url, options);
+      const res = await fetchWithTimeout(url, options);
+      if (!res.ok && TRANSIENT_STATUS_CODES.has(res.status) && attempt < RETRY_DELAYS_MS.length) {
+        console.log(`Deriv REST call got a transient status ${res.status}, retrying in ${RETRY_DELAYS_MS[attempt]}ms...`);
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      return res;
     } catch (err) {
       lastErr = err;
       if (attempt < RETRY_DELAYS_MS.length) {

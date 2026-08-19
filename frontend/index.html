@@ -1259,6 +1259,8 @@
       return;
     }
 
+    var saveBtn = document.getElementById('saveSettingsBtn');
+    saveBtn.disabled = true;
     note.textContent = 'Saving...';
 
     authedFetch(SETTINGS_URL, {
@@ -1279,6 +1281,9 @@
       .catch(function(err) {
         note.textContent = 'Save failed - check your connection and try again.';
         console.error('Settings save error:', err);
+      })
+      .finally(function() {
+        saveBtn.disabled = false;
       });
   });
 

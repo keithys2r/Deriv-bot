@@ -81,6 +81,7 @@ function connectAndGetBalance(wsUrl) {
       clearTimeout(timeout);
       if (!resolved) {
         resolved = true;
+        try { ws.close(); } catch (e) {}
         reject(new Error('WS Error: ' + err.message));
       }
     };
