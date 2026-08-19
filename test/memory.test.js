@@ -1,0 +1,50 @@
+// test/memory.test.js
+// Exercises memory.js's pure stake-scaling math (no Blobs I/O involved).
+
+const memory = require('../netlify/functions/memory');
+
+module.exports = {
+  'getStakeScaleFactor: unchanged behavior at 0/50/80% weekly progress'(assert) {
+    assert.strictEqual(memory.getStakeScaleFactor(0, 100), 1.0);
+    assert.strictEqual(memory.getStakeScaleFactor(50, 100), 0.75);
+    assert.strictEqual(memory.getStakeScaleFactor(80, 100), 0.5);
+  },
+
+  'getLosingStreakScaleFactor: no losses is a no-op'(assert) {
+    assert.strictEqual(memory.getLosingStreakScaleFactor(0, 3), 1.0);
+  },
+
+  'getLosingStreakScaleFactor: ramps linearly toward the cooldown threshold'(assert) {
+    assert.ok(Math.abs(memory.getLosingStreakScaleFactor(1, 3) - 0.8333) < 0.001);
+    assert.ok(Math.abs(memory.getLosingStreakScaleFactor(2, 3) - 0.6667) < 0.001);
+  },
+
+  'getLosingStreakScaleFactor: floors at 0.5 at/past maxConsecutiveLosses'(assert) {
+    assert.strictEqual(memory.getLosingStreakScaleFactor(3, 3), 0.5);
+    assert.strictEqual(memory.getLosingStreakScaleFactor(10, 3), 0.5);
+  },
+
+  'getLosingStreakScaleFactor: disabled/invalid maxConsecutiveLosses is a no-op'(assert) {
+    assert.strictEqual(memory.getLosingStreakScaleFactor(2, 0), 1.0);
+    assert.strictEqual(memory.getLosingStreakScaleFactor(2, undefined), 1.0);
+  },
+
+  'getConfidenceScaleFactor: undefined confidence is a no-op (non-rise_fall strategies)'(assert) {
+    assert.strictEqual(memory.getConfidenceScaleFactor(undefined), 1.0);
+    assert.strictEqual(memory.getConfidenceScaleFactor(null), 1.0);
+  },
+
+  'getConfidenceScaleFactor: 0 confidence floors at 0.5, 1.0 confidence is full stake'(assert) {
+    assert.strictEqual(memory.getConfidenceScaleFactor(0), 0.5);
+    assert.strictEqual(memory.getConfidenceScaleFactor(1), 1.0);
+  },
+
+  'getConfidenceScaleFactor: 0.5 confidence lands at the midpoint'(assert) {
+    assert.strictEqual(memory.getConfidenceScaleFactor(0.5), 0.75);
+  },
+
+  'getConfidenceScaleFactor: clamps out-of-range input'(assert) {
+    assert.strictEqual(memory.getConfidenceScaleFactor(1.5), 1.0);
+    assert.strictEqual(memory.getConfidenceScaleFactor(-1), 0.5);
+  }
+};

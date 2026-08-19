@@ -195,7 +195,7 @@ async function runRiseFallStrategy(token, app_id, settings, strategyName) {
     regime = result.regime;
     adx = result.adx;
 
-    console.log('Signal check:', signalResult.reason);
+    console.log('Signal check (rise_fall):', signalResult.reason);
     if (signalResult.signal) {
       await memory.appendLog(STRATEGY_NAME, `Signal: ${signalResult.signal} - ${signalResult.reason}`, 'info');
     }
@@ -212,7 +212,7 @@ async function runRiseFallStrategy(token, app_id, settings, strategyName) {
     return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
   }
 
-  const stake = await getScaledStake(STRATEGY_NAME, settings);
+  const stake = await getScaledStake(STRATEGY_NAME, settings, signalResult.details ? signalResult.details.confidence : undefined);
   await memory.setActiveTrade(STRATEGY_NAME, {
     direction: signalResult.signal,
     symbol,
@@ -732,17 +732,7 @@ async function runHybridStrategy(token, app_id, settings) {
   const accumulatorCeiling = settings.accumulatorAdxMaxEntry ?? accumulatorStrategy.DEFAULT_ADX_MAX_ENTRY;
   const trendFloor = settings.adxTrendThreshold || 35;
 
-  let picked, reason;
-  if (adx !== null && adx <= accumulatorCeiling) {
-    picked = 'accumulator';
-    reason = `ADX ${adx.toFixed(1)} calm (<= ${accumulatorCeiling}) - survival mode`;
-  } else if (adx !== null && adx >= trendFloor) {
-    picked = 'rise_fall';
-    reason = `ADX ${adx.toFixed(1)} trending (>= ${trendFloor}) - trend-following mode`;
-  } else {
-    picked = 'even_odd';
-    reason = `ADX ${adx !== null ? adx.toFixed(1) : 'n/a'} choppy/unclear - no directional read needed`;
-  }
+  const { picked, reason } = pickHybridBucket(adx, accumulatorCeiling, trendFloor);
 
   console.log(`Hybrid picked ${picked}: ${reason}`);
   await memory.appendLog(STRATEGY_NAME, `Picked ${picked.toUpperCase()} - ${reason}`, 'info');
@@ -755,30 +745,67 @@ async function runHybridStrategy(token, app_id, settings) {
 
   if (picked === 'accumulator') {
     return await runAccumulatorStrategy(token, app_id, subSettings, STRATEGY_NAME);
-  } else if (picked === 'rise_fall') {
-    return await runRiseFallStrategy(token, app_id, subSettings, STRATEGY_NAME);
   } else {
-    return await runEvenOddStrategy(token, app_id, subSettings, STRATEGY_NAME);
+    return await runRiseFallStrategy(token, app_id, subSettings, STRATEGY_NAME);
   }
+}
+
+// Pure decision: which sub-strategy style fits the current ADX read.
+// Extracted so it's unit-testable without any I/O. The "unclear" middle
+// zone (neither calm enough for accumulator nor trending enough for
+// rise_fall) used to route to even_odd - but even_odd has NO real
+// statistical edge by design (see its own file header), so forcing a
+// trade through it there was worse than not trading. Deferring to
+// rise_fall's own regime/hysteresis logic instead is more honest: it may
+// legitimately produce no signal this run, which is a better outcome
+// than a guaranteed-coin-flip bet.
+function pickHybridBucket(adx, accumulatorCeiling, trendFloor) {
+  if (adx !== null && adx !== undefined && adx <= accumulatorCeiling) {
+    return { picked: 'accumulator', reason: `ADX ${adx.toFixed(1)} calm (<= ${accumulatorCeiling}) - survival mode` };
+  }
+  if (adx !== null && adx !== undefined && adx >= trendFloor) {
+    return { picked: 'rise_fall', reason: `ADX ${adx.toFixed(1)} trending (>= ${trendFloor}) - trend-following mode` };
+  }
+  return {
+    picked: 'rise_fall',
+    reason: `ADX ${adx !== null && adx !== undefined ? adx.toFixed(1) : 'n/a'} unclear (${accumulatorCeiling}-${trendFloor}) - deferring to rise_fall's own regime/hysteresis signal (may produce no trade this run)`
+  };
 }
 
 // ---- Shared helpers ----
 
-// Applies the weekly de-risk scaling to the base stake - as weekly net
-// profit approaches the weekly goal, stake scales DOWN to protect gains
-// already made. Never scales up, only ever protects.
-async function getScaledStake(strategyName, settings) {
+// Applies three independent, purely-DOWNWARD-scaling factors to the base
+// stake: weekly de-risking (protects gains as the weekly goal nears),
+// losing-streak de-risking (backs off smoothly instead of trading full
+// size right up until risk.js's cooldown cuts it to zero), and signal
+// confidence (only meaningful for rise_fall right now - lower-confidence
+// signals risk less). All three are <= 1.0 and multiply together, so the
+// combined result can never exceed baseStake - and since baseStake itself
+// is settings.stakeAmount, already clamped to <= 20% of dailyStopLoss by
+// both driver.js's handler and settings.js's validateStakeAmount, scaling
+// can never push a trade's risk above that clamp either.
+async function getScaledStake(strategyName, settings, confidence) {
   const baseStake = parseFloat(settings.stakeAmount || 1);
+
   const weeklyProfitGoal = settings.weeklyProfitGoal;
-  if (!weeklyProfitGoal || weeklyProfitGoal <= 0) return baseStake;
+  let weeklyFactor = 1.0;
+  let weeklyNet = 0;
+  if (weeklyProfitGoal && weeklyProfitGoal > 0) {
+    const weeklyState = await memory.loadWeeklyState(strategyName);
+    weeklyNet = weeklyState.weeklyProfit - weeklyState.weeklyLoss;
+    weeklyFactor = memory.getStakeScaleFactor(weeklyNet, weeklyProfitGoal);
+  }
 
-  const weeklyState = await memory.loadWeeklyState(strategyName);
-  const weeklyNet = weeklyState.weeklyProfit - weeklyState.weeklyLoss;
-  const scaleFactor = memory.getStakeScaleFactor(weeklyNet, weeklyProfitGoal);
+  const state = await memory.loadState(strategyName);
+  const losingStreakFactor = memory.getLosingStreakScaleFactor(state.consecutiveLosses, settings.maxConsecutiveLosses);
 
-  if (scaleFactor < 1.0) {
-    const scaledStake = Math.max(0.35, baseStake * scaleFactor);
-    console.log(`Weekly progress ${(weeklyNet / weeklyProfitGoal * 100).toFixed(0)}% toward goal - scaling stake from $${baseStake} to $${scaledStake.toFixed(2)}`);
+  const confidenceFactor = memory.getConfidenceScaleFactor(confidence);
+
+  const combinedFactor = weeklyFactor * losingStreakFactor * confidenceFactor;
+
+  if (combinedFactor < 1.0) {
+    const scaledStake = Math.max(0.35, baseStake * combinedFactor);
+    console.log(`Stake scaled: weekly=${weeklyFactor.toFixed(2)} (${weeklyProfitGoal ? (weeklyNet / weeklyProfitGoal * 100).toFixed(0) + '%' : 'n/a'}) losingStreak=${losingStreakFactor.toFixed(2)} (${state.consecutiveLosses || 0} losses) confidence=${confidenceFactor.toFixed(2)} -> $${baseStake} to $${scaledStake.toFixed(2)}`);
     return scaledStake;
   }
   return baseStake;
@@ -1483,3 +1510,5 @@ async function forceSellAndWait(token, app_id, contractId) {
     return { error: err.message };
   }
 }
+
+module.exports.pickHybridBucket = pickHybridBucket;
