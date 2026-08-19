@@ -135,6 +135,69 @@ exports.handler = async function () {
   }
 };
 
+// Fetches candles for a symbol, building custom tick-bucketed candles
+// first and falling back to Deriv's native 60s candles if there isn't
+// enough tick history yet - shared by the accumulator entry-gate path
+// and hybrid's own ADX read so the fallback logic lives once.
+async function fetchCandlesForSymbol(token, app_id, symbol, neededCandles, granularitySeconds) {
+  const candleAuth = await getOtpWebSocketUrl(token, app_id);
+  const tickCount = Math.min(Math.max(neededCandles * 15, 1000), 5000);
+
+  const tickData = await connectAndGetTicksForCandles(candleAuth.wsUrl, symbol, tickCount);
+  let candles = buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds);
+
+  if (candles.length < neededCandles) {
+    console.log(`[${symbol}] Tick-based candles insufficient (${candles.length}/${neededCandles}) - falling back to native candles.`);
+    const fallbackAuth = await getOtpWebSocketUrl(token, app_id);
+    candles = await connectAndGetNativeCandles(fallbackAuth.wsUrl, symbol, neededCandles);
+  }
+
+  return candles;
+}
+
+// Batched version of fetchCandlesForSymbol for scanning a whole
+// watchlist at once: authenticates ONCE and fetches tick history for
+// every symbol over a single WebSocket connection, instead of each
+// symbol paying its own getOtpWebSocketUrl round-trip (2 REST calls +
+// a fresh one-time OTP token each). Only symbols that come up short on
+// tick history fall back to an individual native-candle request - most
+// scans need zero fallback calls at all.
+async function fetchCandlesForWatchlist(token, app_id, symbols, neededCandles, granularitySeconds) {
+  const auth = await getOtpWebSocketUrl(token, app_id);
+  const tickCount = Math.min(Math.max(neededCandles * 15, 1000), 5000);
+
+  let tickResults;
+  try {
+    tickResults = await connectAndGetTicksForSymbols(auth.wsUrl, symbols, tickCount);
+  } catch (err) {
+    // Whole-connection failure - fall through and let every symbol
+    // retry individually below rather than losing the entire scan.
+    console.log(`Batched tick fetch failed (${err.message}) - falling back to per-symbol native candles.`);
+    tickResults = {};
+  }
+
+  const candlesBySymbol = {};
+  for (const symbol of symbols) {
+    const tickData = tickResults[symbol];
+    let candles = tickData ? buildCandlesFromTicks(tickData.prices, tickData.times, granularitySeconds) : [];
+
+    if (candles.length < neededCandles) {
+      console.log(`[${symbol}] Tick-based candles insufficient (${candles.length}/${neededCandles}) - falling back to native candles.`);
+      try {
+        const fallbackAuth = await getOtpWebSocketUrl(token, app_id);
+        candles = await connectAndGetNativeCandles(fallbackAuth.wsUrl, symbol, neededCandles);
+      } catch (err) {
+        console.log(`[${symbol}] Native candle fallback also failed: ${err.message}`);
+        candles = [];
+      }
+    }
+
+    candlesBySymbol[symbol] = candles;
+  }
+
+  return candlesBySymbol;
+}
+
 // ---- ACCUMULATOR branch ----
 // Unlike Rise/Fall, an accumulator has no fixed expiry, so this branch
 // splits into two paths each run: (1) one is already open -> poll it
