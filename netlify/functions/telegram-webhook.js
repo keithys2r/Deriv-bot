@@ -19,7 +19,7 @@
 
 const memory = require('./memory');
 const telegram = require('./telegram');
-const { validateStakeAmount } = require('./settings');
+const { validateStakeAmount, validateProfitGoal } = require('./settings');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -99,6 +99,10 @@ async function handleCommand(rawText) {
       return handleStrategy(args[0]);
     case '/stake':
       return handleStake(args[0]);
+    case '/dailygoal':
+      return handleDailyGoal(args[0]);
+    case '/weeklygoal':
+      return handleWeeklyGoal(args[0]);
     case '/help':
       return handleHelp();
     default:
@@ -210,6 +214,40 @@ async function handleStake(arg) {
   return telegram.sendMessage(`✅ Stake set to $${validated.value.toFixed(2)} - takes effect on the next scheduled run.`);
 }
 
+async function handleDailyGoal(arg) {
+  const settings = await memory.loadSettings();
+
+  if (!arg) {
+    return telegram.sendMessage(`Current daily profit goal: $${settings.dailyProfitGoal}\nSend /dailygoal &lt;amount&gt; to change it.`);
+  }
+
+  const validated = validateProfitGoal(arg);
+  if (!validated.ok) {
+    return telegram.sendMessage(`❌ ${validated.error}`);
+  }
+
+  const saved = await memory.saveSettings({ dailyProfitGoal: validated.value });
+  await memory.appendLog(saved.activeStrategy, `Daily profit goal changed to $${validated.value.toFixed(2)} via Telegram`, 'info');
+  return telegram.sendMessage(`✅ Daily profit goal set to $${validated.value.toFixed(2)} - takes effect on the next scheduled run.`);
+}
+
+async function handleWeeklyGoal(arg) {
+  const settings = await memory.loadSettings();
+
+  if (!arg) {
+    return telegram.sendMessage(`Current weekly profit goal: $${settings.weeklyProfitGoal}\nSend /weeklygoal &lt;amount&gt; to change it.`);
+  }
+
+  const validated = validateProfitGoal(arg);
+  if (!validated.ok) {
+    return telegram.sendMessage(`❌ ${validated.error}`);
+  }
+
+  const saved = await memory.saveSettings({ weeklyProfitGoal: validated.value });
+  await memory.appendLog(saved.activeStrategy, `Weekly profit goal changed to $${validated.value.toFixed(2)} via Telegram`, 'info');
+  return telegram.sendMessage(`✅ Weekly profit goal set to $${validated.value.toFixed(2)} - takes effect on the next scheduled run.`);
+}
+
 async function handleHelp() {
   return telegram.sendMessage(
     '<b>Commands</b>\n' +
@@ -218,6 +256,8 @@ async function handleHelp() {
     '/status - current status, P&amp;L, active trade\n' +
     '/strategy [accumulator|digit_differ|hybrid] - view/switch strategy, or send with no argument for tappable buttons\n' +
     '/stake [amount] - view or change stake\n' +
+    '/dailygoal [amount] - view or change daily profit goal\n' +
+    '/weeklygoal [amount] - view or change weekly profit goal\n' +
     '/help - this message'
   );
 }
