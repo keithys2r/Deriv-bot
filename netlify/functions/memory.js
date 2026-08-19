@@ -220,7 +220,7 @@ const SETTINGS_KEY = 'bot_settings';
 
 function defaultSettings() {
   return {
-    activeStrategy: 'rise_fall', // 'rise_fall' | 'accumulator' | 'even_odd' | 'hybrid' - the switch
+    activeStrategy: 'rise_fall', // 'rise_fall' | 'accumulator' | 'hybrid' - the switch
     symbol: 'R_100',
     autoSelectSymbol: false,
     watchlist: ['R_100', 'R_75', 'R_50'],
@@ -250,8 +250,6 @@ function defaultSettings() {
                                      // a knockout (see strategy_accumulator.ticksToTakeProfitPct)
     accumulatorAdxMaxEntry: 20,    // only enter when ADX is at/below this (calm/ranging market)
     accumulatorMaxHoldMinutes: 10, // safety backstop: force-sell if still open this long
-    evenOddLookback: 20,       // how many recent ticks the "fade the hot parity" heuristic looks at
-    evenOddDurationTicks: 1,   // contract duration in ticks
     dailyProfitGoal: 20,
     dailyStopLoss: 15,
     weeklyProfitGoal: 100,
@@ -415,7 +413,7 @@ async function recordTradeHistory(strategyName, record) {
     profit: record.profit,
     exitReason: record.exitReason || null, // accumulator only: 'take_profit' | 'knockout' | 'timeout'
     holdSeconds: record.holdSeconds !== undefined ? record.holdSeconds : null, // accumulator only
-    subStrategy: record.subStrategy || null // hybrid only: 'rise_fall' | 'accumulator' | 'even_odd' - which style hybrid picked for this trade
+    subStrategy: record.subStrategy || null // hybrid only: 'rise_fall' | 'accumulator' - which style hybrid picked for this trade
   });
 
   if (history.length > TRADE_HISTORY_MAX) {
@@ -445,7 +443,7 @@ async function computeStats(strategyName) {
   const byRegime = {}; // 'trend' | 'range' -> { wins, losses, profit }
   const bySymbol = {}; // symbol -> { wins, losses, profit }
   const byExitReason = {}; // accumulator only: 'take_profit' | 'knockout' | 'timeout' -> { wins, losses, profit }
-  const bySubStrategy = {}; // hybrid only: 'rise_fall' | 'accumulator' | 'even_odd' -> { wins, losses, profit }
+  const bySubStrategy = {}; // hybrid only: 'rise_fall' | 'accumulator' -> { wins, losses, profit }
 
   let totalWins = 0;
   let totalLosses = 0;
@@ -678,8 +676,8 @@ function getLosingStreakScaleFactor(consecutiveLosses, maxConsecutiveLosses) {
 // cleared whatever floor/threshold gated it into firing at all, so it
 // doesn't deserve a hard cutoff - a linear floor-to-1.0 ramp means
 // confidence 0 trades at half size, confidence 1 trades at full size.
-// Strategies without a confidence score (accumulator, even_odd) pass
-// undefined and get a no-op 1.0.
+// Strategies without a confidence score (accumulator) pass undefined
+// and get a no-op 1.0.
 const MIN_CONFIDENCE_FACTOR = 0.5;
 function getConfidenceScaleFactor(confidence) {
   if (confidence === undefined || confidence === null || !Number.isFinite(confidence)) return 1.0;

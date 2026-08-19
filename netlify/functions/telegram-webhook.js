@@ -127,7 +127,7 @@ async function handleStatus() {
   return telegram.sendMessage(text);
 }
 
-const VALID_STRATEGIES = ['rise_fall', 'accumulator', 'even_odd', 'hybrid'];
+const VALID_STRATEGIES = ['rise_fall', 'accumulator', 'hybrid'];
 
 async function handleStrategy(arg) {
   if (!arg) {
@@ -168,7 +168,7 @@ async function handleHelp() {
     '/start - resume trading\n' +
     '/stop - pause trading\n' +
     '/status - current status, P&amp;L, active trade\n' +
-    '/strategy [rise_fall|accumulator|even_odd|hybrid] - view or switch strategy\n' +
+    '/strategy [rise_fall|accumulator|hybrid] - view or switch strategy\n' +
     '/stake [amount] - view or change stake\n' +
     '/help - this message'
   );

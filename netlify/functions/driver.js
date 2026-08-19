@@ -1,11 +1,10 @@
 // driver.js
 // Scheduled function - Netlify triggers this automatically on a timer.
 //
-// ONE bot, FOUR strategies, ONE switch. settings.activeStrategy decides
+// ONE bot, THREE strategies, ONE switch. settings.activeStrategy decides
 // which logic runs each minute: 'rise_fall' (EMA/RSI on candles),
-// 'accumulator' (ADX-gated entry into an Accumulator contract),
-// 'even_odd' (fade-the-hot-parity heuristic on DIGITEVEN/DIGITODD), or
-// 'hybrid' (reads ADX and picks one of the other three each run - see
+// 'accumulator' (ADX-gated entry into an Accumulator contract), or
+// 'hybrid' (reads ADX and picks one of the other two each run - see
 // runHybridStrategy). Only one runs per invocation - they are not run in
 // parallel. Switching strategies in the dashboard takes effect on the
 // NEXT scheduled run.
@@ -32,7 +31,6 @@ const risk = require('./risk');
 const telegram = require('./telegram');
 const riseFallStrategy = require('./strategy_rise_fall');
 const accumulatorStrategy = require('./strategy_accumulator');
-const evenOddStrategy = require('./strategy_even_odd');
 const { getOtpWebSocketUrl } = require('./deriv-auth');
 
 // ---- Config ----
@@ -96,8 +94,6 @@ exports.handler = async function () {
     let result;
     if (strategyName === 'accumulator') {
       result = await runAccumulatorStrategy(token, app_id, settings);
-    } else if (strategyName === 'even_odd') {
-      result = await runEvenOddStrategy(token, app_id, settings);
     } else if (strategyName === 'hybrid') {
       result = await runHybridStrategy(token, app_id, settings);
     } else {
@@ -413,86 +409,6 @@ async function computeRiseFallSignal(symbol, candles, settings) {
   return { symbol, signal: signalResult.signal, reason: signalResult.reason, details: signalResult.details, regime, adx, confidence: signalResult.details ? signalResult.details.confidence : undefined };
 }
 
-// ---- EVEN/ODD branch ----
-// Same short-lived lifecycle as Rise/Fall (settles within a handful of
-// ticks), so this can block a single invocation on placeContractAndWait()
-// too, instead of the accumulator's buy-and-poll pattern.
-async function runEvenOddStrategy(token, app_id, settings, strategyName) {
-  const STRATEGY_NAME = strategyName || 'even_odd';
-  const symbol = settings.symbol;
-  const lookback = settings.evenOddLookback || 20;
-  const durationTicks = settings.evenOddDurationTicks || 1;
-
-  const tickAuth = await getOtpWebSocketUrl(token, app_id);
-  const tickData = await connectAndGetTicksForCandles(tickAuth.wsUrl, symbol, lookback + 5);
-
-  const signalResult = evenOddStrategy.getSignal(tickData.prices, { lookback });
-  console.log('Even/odd signal check:', signalResult.reason);
-  if (signalResult.signal) {
-    await memory.appendLog(STRATEGY_NAME, `Signal: ${signalResult.signal === 'DIGITEVEN' ? 'EVEN' : 'ODD'} - ${signalResult.reason}`, 'info');
-  }
-
-  if (!signalResult.signal) {
-    await maybeSendEODReport(STRATEGY_NAME);
-    return respond({ message: 'No trade signal this run', ...signalResult });
-  }
-
-  const riskCheck = await handleRiskGate(STRATEGY_NAME);
-  if (!riskCheck.canTrade) {
-    await maybeSendEODReport(STRATEGY_NAME);
-    return respond({ message: 'Trade blocked by risk rules', reason: riskCheck.reason });
-  }
-
-  const stake = await getScaledStake(STRATEGY_NAME, settings);
-  const direction = signalResult.signal === 'DIGITEVEN' ? 'EVEN' : 'ODD';
-  await memory.setActiveTrade(STRATEGY_NAME, {
-    direction,
-    symbol,
-    stake,
-    placedAt: new Date().toISOString()
-  });
-
-  const tradeAuth = await getOtpWebSocketUrl(token, app_id);
-  const tradeResult = await placeContractAndWait(tradeAuth.wsUrl, {
-    contract_type: signalResult.signal,
-    underlying_symbol: symbol,
-    duration: durationTicks,
-    duration_unit: 't',
-    basis: 'stake',
-    amount: stake,
-    currency: 'USD'
-  }, stake, (contractId) => {
-    memory.setActiveTrade(STRATEGY_NAME, {
-      direction,
-      symbol,
-      stake,
-      contractId,
-      placedAt: new Date().toISOString()
-    }).catch((e) => console.log('Failed to persist contract ID:', e.message));
-  });
-
-  if (tradeResult.error) {
-    console.log('Trade execution error:', tradeResult.error);
-    if (!tradeResult.contractPlaced) {
-      await memory.clearActiveTrade(STRATEGY_NAME);
-    } else {
-      console.log('Contract was placed but settlement wait timed out - leaving active trade marker for reconciliation next run.');
-    }
-    return respond({ message: 'Trade failed to execute', error: tradeResult.error });
-  }
-
-  const updatedState = await recordAndLogTrade(STRATEGY_NAME, direction, symbol, stake, tradeResult, null, null, undefined, 'even_odd');
-  await handlePostTradeRisk(STRATEGY_NAME, updatedState);
-  await maybeSendEODReport(STRATEGY_NAME);
-
-  return respond({
-    message: `Trade placed: ${direction} - ${tradeResult.won ? 'WON' : 'LOST'} $${Math.abs(tradeResult.profit).toFixed(2)}`,
-    signal: signalResult,
-    trade: tradeResult,
-    state: updatedState
-  });
-}
-
 // ---- ACCUMULATOR branch ----
 // Unlike Rise/Fall, an accumulator has no fixed expiry, so this branch
 // splits into two paths each run: (1) one is already open -> poll it
@@ -704,7 +620,7 @@ async function pollActiveAccumulator(token, app_id, settings, active, strategyNa
 // unchanged - they're already generic by strategyName - just retargeted
 // at the 'hybrid' state/stats bucket, so this gets its own P&L/risk
 // limits/performance tab for free without duplicating any entry, buy,
-// or record logic. No watchlist auto-scan - one symbol, like even_odd.
+// or record logic. No watchlist auto-scan - one symbol only.
 async function runHybridStrategy(token, app_id, settings) {
   const STRATEGY_NAME = 'hybrid';
 
@@ -713,8 +629,8 @@ async function runHybridStrategy(token, app_id, settings) {
   // can't abandon it just because this run's read points elsewhere now.
   // (Any OTHER kind of leftover active trade would already have been
   // resolved by reconcileOrphanedTrade before this function ever runs,
-  // since rise_fall/even_odd trades settle within a single invocation
-  // under normal operation - see its accumulator-shape check above.)
+  // since rise_fall trades settle within a single invocation under
+  // normal operation - see its accumulator-shape check above.)
   const active = await memory.getActiveTrade(STRATEGY_NAME);
   if (active && active.contractId) {
     return await pollActiveAccumulator(token, app_id, settings, active, STRATEGY_NAME);
@@ -756,13 +672,12 @@ async function runHybridStrategy(token, app_id, settings) {
 
 // Pure decision: which sub-strategy style fits the current ADX read.
 // Extracted so it's unit-testable without any I/O. The "unclear" middle
-// zone (neither calm enough for accumulator nor trending enough for
-// rise_fall) used to route to even_odd - but even_odd has NO real
-// statistical edge by design (see its own file header), so forcing a
-// trade through it there was worse than not trading. Deferring to
-// rise_fall's own regime/hysteresis logic instead is more honest: it may
-// legitimately produce no signal this run, which is a better outcome
-// than a guaranteed-coin-flip bet.
+// zone (neither calm enough for accumulator nor trending enough for a
+// confident trend call) defers to rise_fall's own regime/hysteresis
+// logic rather than forcing a trade - it may legitimately produce no
+// signal this run, which is a better outcome than a guaranteed
+// coin-flip bet (this is also why even_odd, which had no real
+// statistical edge by design, was removed from the codebase entirely).
 function pickHybridBucket(adx, accumulatorCeiling, trendFloor) {
   if (adx !== null && adx !== undefined && adx <= accumulatorCeiling) {
     return { picked: 'accumulator', reason: `ADX ${adx.toFixed(1)} calm (<= ${accumulatorCeiling}) - survival mode` };
