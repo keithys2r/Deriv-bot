@@ -7,6 +7,3 @@
 
 [functions."driver"]
   schedule = "*/1 * * * *"
-
-[functions."telegram-supervisor"]
-  schedule = "*/15 * * * *"
