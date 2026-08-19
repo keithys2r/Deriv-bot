@@ -117,10 +117,12 @@ async function handleStatus() {
   const settings = await memory.loadSettings();
   const strategyName = settings.activeStrategy || 'accumulator';
   const state = await memory.loadState(strategyName);
+  const weeklyState = await memory.loadWeeklyState(strategyName);
   const activeTrade = await memory.getActiveTrade(strategyName);
   const lastTrade = await memory.getLastTrade(strategyName);
 
   const netProfit = state.dailyProfit - state.dailyLoss;
+  const weeklyNet = weeklyState.weeklyProfit - weeklyState.weeklyLoss;
   const winRate = state.tradesToday > 0 ? (state.wins / state.tradesToday) * 100 : 0;
 
   let statusLine;
@@ -130,6 +132,7 @@ async function handleStatus() {
 
   let text = `${statusLine}\nStrategy: <b>${strategyName}</b>\n` +
     `Net P&amp;L today: ${netProfit >= 0 ? '+' : '-'}$${Math.abs(netProfit).toFixed(2)}\n` +
+    `Weekly P&amp;L: ${weeklyNet >= 0 ? '+' : '-'}$${Math.abs(weeklyNet).toFixed(2)} / $${settings.weeklyProfitGoal} goal\n` +
     `Trades: ${state.tradesToday} (${state.wins}W/${state.losses}L, ${winRate.toFixed(0)}%)\n` +
     `Stake: $${settings.stakeAmount}`;
 
