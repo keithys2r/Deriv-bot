@@ -640,57 +640,27 @@
           <input type="number" id="rsiOversoldInput" min="0" max="49" value="30">
         </div>
       </div>
-      <div id="classicModeFields">
-        <div class="checkbox-row">
-          <input type="checkbox" id="rsiConfirmInput" checked>
-          <label for="rsiConfirmInput">Require RSI confirmation on crossover (uncheck to fire on EMA crossover alone - more trades, less filtering)</label>
-        </div>
-        <p class="settings-note" style="text-align:left;margin-top:4px;">Only applies in Classic mode (below, unchecked) - ignored once Adaptive regime mode is on.</p>
-      </div>
-
       <p class="settings-section-label" style="margin-top:14px;">Candle timeframe (seconds)</p>
       <input type="number" id="granularityInput" min="5" max="60" step="5" value="15">
       <p class="settings-note" style="text-align:left;margin-top:6px;">Custom candles built from raw ticks - Deriv's own candles bottom out at 60s. Lower = catches faster moves, but noisier.</p>
 
-      <div class="checkbox-row" style="margin-top:16px;">
-        <input type="checkbox" id="adaptiveRegimeInput" checked>
-        <label for="adaptiveRegimeInput">Adaptive regime mode - switches between trend-following (EMA direction) and range mean-reversion (RSI) based on ADX, instead of crossover-only</label>
-      </div>
-
-      <div id="adaptiveRegimeFields">
-        <p class="settings-section-label" style="margin-top:14px;">ADX regime detection</p>
-        <div class="settings-grid">
-          <div>
-            <label>ADX period</label>
-            <input type="number" id="adxPeriodInput" min="2" max="50" value="14">
-          </div>
-          <div>
-            <label>Trend threshold</label>
-            <input type="number" id="adxTrendInput" min="5" max="90" value="35">
-          </div>
-          <div>
-            <label>Range threshold</label>
-            <input type="number" id="adxRangeInput" min="5" max="90" value="25">
-          </div>
-          <div>
-            <label>Trend ADX floor</label>
-            <input type="number" id="adxFloorTrendInput" min="0" max="90" value="25">
-          </div>
+      <p class="settings-section-label" style="margin-top:14px;">ADX regime detection</p>
+      <div class="settings-grid">
+        <div>
+          <label>ADX period</label>
+          <input type="number" id="adxPeriodInput" min="2" max="50" value="14">
         </div>
-
-        <div class="checkbox-row" style="margin-top:12px;">
-          <input type="checkbox" id="biasEnabledInput" checked>
-          <label for="biasEnabledInput">Bias filter - block a range-mode trade against a strong recent price direction</label>
+        <div>
+          <label>Trend threshold</label>
+          <input type="number" id="adxTrendInput" min="5" max="90" value="35">
         </div>
-        <div class="settings-grid" style="margin-top:8px;">
-          <div>
-            <label>Bias lookback (candles)</label>
-            <input type="number" id="biasPeriodInput" min="5" max="100" value="20">
-          </div>
-          <div>
-            <label>Bias threshold (%)</label>
-            <input type="number" id="biasThresholdInput" min="0.01" max="5" step="0.01" value="0.05">
-          </div>
+        <div>
+          <label>Range threshold</label>
+          <input type="number" id="adxRangeInput" min="5" max="90" value="25">
+        </div>
+        <div>
+          <label>Trend ADX floor</label>
+          <input type="number" id="adxFloorTrendInput" min="0" max="90" value="25">
         </div>
       </div>
     </div>
@@ -1038,18 +1008,11 @@
     document.getElementById('rsiPeriodInput').value = settings.rsiPeriod;
     document.getElementById('rsiOverboughtInput').value = settings.rsiOverbought;
     document.getElementById('rsiOversoldInput').value = settings.rsiOversold;
-    document.getElementById('rsiConfirmInput').checked = settings.requireRsiConfirmation !== false;
     document.getElementById('granularityInput').value = settings.candleGranularitySeconds || 15;
-    document.getElementById('adaptiveRegimeInput').checked = settings.useAdaptiveRegime !== false;
     document.getElementById('adxPeriodInput').value = settings.adxPeriod || 14;
     document.getElementById('adxTrendInput').value = settings.adxTrendThreshold || 35;
     document.getElementById('adxRangeInput').value = settings.adxRangeThreshold || 25;
     document.getElementById('adxFloorTrendInput').value = settings.adxFloorTrend ?? 25;
-    document.getElementById('biasEnabledInput').checked = settings.biasEnabled !== false;
-    document.getElementById('biasPeriodInput').value = settings.biasPeriod || 20;
-    document.getElementById('biasThresholdInput').value = settings.biasThresholdPct || 0.05;
-    document.getElementById('adaptiveRegimeFields').style.display = (settings.useAdaptiveRegime !== false) ? 'block' : 'none';
-    document.getElementById('classicModeFields').style.display = (settings.useAdaptiveRegime !== false) ? 'none' : 'block';
     document.getElementById('accumulatorGrowthRateInput').value = settings.accumulatorGrowthRate || 0.01;
     document.getElementById('accumulatorTakeProfitInput').value = Math.round((settings.accumulatorTakeProfitPct || 0.05) * 100);
     document.getElementById('accumulatorTakeProfitTicksInput').value = settings.accumulatorTakeProfitTicks || 0;
@@ -1150,11 +1113,6 @@
   document.getElementById('hybridBtn').addEventListener('click', function() {
     selectedStrategy = 'hybrid';
     updateStrategyToggleUI();
-  });
-
-  document.getElementById('adaptiveRegimeInput').addEventListener('change', function() {
-    document.getElementById('adaptiveRegimeFields').style.display = this.checked ? 'block' : 'none';
-    document.getElementById('classicModeFields').style.display = this.checked ? 'none' : 'block';
   });
 
   document.getElementById('settingsToggle').addEventListener('click', function() {
@@ -1281,16 +1239,11 @@
       rsiPeriod: parseInt(document.getElementById('rsiPeriodInput').value),
       rsiOverbought: parseInt(document.getElementById('rsiOverboughtInput').value),
       rsiOversold: parseInt(document.getElementById('rsiOversoldInput').value),
-      requireRsiConfirmation: document.getElementById('rsiConfirmInput').checked,
       candleGranularitySeconds: parseInt(document.getElementById('granularityInput').value),
-      useAdaptiveRegime: document.getElementById('adaptiveRegimeInput').checked,
       adxPeriod: parseInt(document.getElementById('adxPeriodInput').value),
       adxTrendThreshold: parseInt(document.getElementById('adxTrendInput').value),
       adxRangeThreshold: parseInt(document.getElementById('adxRangeInput').value),
       adxFloorTrend: parseInt(document.getElementById('adxFloorTrendInput').value),
-      biasEnabled: document.getElementById('biasEnabledInput').checked,
-      biasPeriod: parseInt(document.getElementById('biasPeriodInput').value),
-      biasThresholdPct: parseFloat(document.getElementById('biasThresholdInput').value),
       accumulatorGrowthRate: parseFloat(document.getElementById('accumulatorGrowthRateInput').value),
       accumulatorTakeProfitPct: parseInt(document.getElementById('accumulatorTakeProfitInput').value) / 100,
       accumulatorTakeProfitTicks: parseInt(document.getElementById('accumulatorTakeProfitTicksInput').value) || 0,

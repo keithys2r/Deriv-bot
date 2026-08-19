@@ -230,17 +230,12 @@ function defaultSettings() {
     rsiPeriod: 14,
     rsiOverbought: 70,
     rsiOversold: 30,
-    requireRsiConfirmation: true,
     candleGranularitySeconds: 15, // custom candle size built from raw ticks - Deriv's native minimum is 60s
-    useAdaptiveRegime: true, // trend/range switching instead of crossover-only
     adxPeriod: 14,
     adxTrendThreshold: 35, // ADX needs to stay above this to confirm trend regime
     adxRangeThreshold: 25, // ADX needs to stay below this to confirm range regime
     adxFloorTrend: 25,     // minimum ADX required to actually trade in trend regime
     adxFloorRange: 0,      // minimum ADX required to trade in range regime (0 = disabled)
-    biasEnabled: true,
-    biasPeriod: 20,
-    biasThresholdPct: 0.05,
     accumulatorGrowthRate: 0.01,   // 1% - the safest/lowest of Deriv's allowed growth rates, wider knockout barrier
     accumulatorTakeProfitPct: 0.05, // cash out once profit reaches 5% of stake
     accumulatorTakeProfitTicks: 0,  // 0 = disabled, use accumulatorTakeProfitPct directly.

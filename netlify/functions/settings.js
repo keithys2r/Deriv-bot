@@ -105,19 +105,14 @@ exports.handler = async function (event) {
       if (body.rsiPeriod && body.rsiPeriod > 0) update.rsiPeriod = parseInt(body.rsiPeriod);
       if (body.rsiOverbought && body.rsiOverbought > 50 && body.rsiOverbought <= 100) update.rsiOverbought = parseInt(body.rsiOverbought);
       if (body.rsiOversold && body.rsiOversold >= 0 && body.rsiOversold < 50) update.rsiOversold = parseInt(body.rsiOversold);
-      if (typeof body.requireRsiConfirmation === 'boolean') update.requireRsiConfirmation = body.requireRsiConfirmation;
       if (body.candleGranularitySeconds && body.candleGranularitySeconds >= 5 && body.candleGranularitySeconds <= 60) {
         update.candleGranularitySeconds = parseInt(body.candleGranularitySeconds);
       }
-      if (typeof body.useAdaptiveRegime === 'boolean') update.useAdaptiveRegime = body.useAdaptiveRegime;
       if (body.adxPeriod && body.adxPeriod >= 2 && body.adxPeriod <= 50) update.adxPeriod = parseInt(body.adxPeriod);
       if (body.adxTrendThreshold && body.adxTrendThreshold >= 5 && body.adxTrendThreshold <= 90) update.adxTrendThreshold = parseInt(body.adxTrendThreshold);
       if (body.adxRangeThreshold && body.adxRangeThreshold >= 5 && body.adxRangeThreshold <= 90) update.adxRangeThreshold = parseInt(body.adxRangeThreshold);
       if (body.adxFloorTrend !== undefined && body.adxFloorTrend >= 0 && body.adxFloorTrend <= 90) update.adxFloorTrend = parseInt(body.adxFloorTrend);
       if (body.adxFloorRange !== undefined && body.adxFloorRange >= 0 && body.adxFloorRange <= 90) update.adxFloorRange = parseInt(body.adxFloorRange);
-      if (typeof body.biasEnabled === 'boolean') update.biasEnabled = body.biasEnabled;
-      if (body.biasPeriod && body.biasPeriod >= 5 && body.biasPeriod <= 100) update.biasPeriod = parseInt(body.biasPeriod);
-      if (body.biasThresholdPct !== undefined && body.biasThresholdPct >= 0.01 && body.biasThresholdPct <= 5) update.biasThresholdPct = parseFloat(body.biasThresholdPct);
 
       if (body.accumulatorGrowthRate !== undefined && ACCUMULATOR_GROWTH_RATES.includes(body.accumulatorGrowthRate)) {
         update.accumulatorGrowthRate = body.accumulatorGrowthRate;
