@@ -312,7 +312,7 @@ const LOCK_TIMEOUT_MS = 25000; // if a lock is older than this, assume the holde
 // or race with the original run's state writes.
 async function acquireLock() {
   const store = getMemoryStore();
-  const existing = await store.get(LOCK_KEY, { type: 'json' });
+  const existing = await store.get(LOCK_KEY, { type: 'json', consistency: 'strong' });
 
   if (existing && existing.lockedAt) {
     const age = Date.now() - new Date(existing.lockedAt).getTime();
@@ -321,8 +321,17 @@ async function acquireLock() {
     }
   }
 
-  await store.setJSON(LOCK_KEY, { lockedAt: new Date().toISOString() });
-  return true;
+  // The installed @netlify/blobs client has no conditional/compare-and-swap
+  // write (set() takes no onlyIfNew/onlyIfMatch option), so true atomicity
+  // isn't available - narrow the race instead: write a unique token, then
+  // read the key back with strong consistency. If two invocations race here,
+  // both writes land but only one is the actual last write; both readers
+  // then see that SAME value, so only the invocation whose token matches
+  // proceeds, and the other correctly backs off instead of both trading.
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  await store.setJSON(LOCK_KEY, { lockedAt: new Date().toISOString(), token });
+  const confirm = await store.get(LOCK_KEY, { type: 'json', consistency: 'strong' });
+  return !!confirm && confirm.token === token;
 }
 
 async function releaseLock() {

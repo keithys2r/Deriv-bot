@@ -28,9 +28,9 @@ function calculateADX(candles, period) {
     mdm.push(downMove > upMove && downMove > 0 ? downMove : 0);
   }
 
-  const smTR = trs.slice(0, period).reduce((a, b) => a + b, 0);
-  const smPDM = pdm.slice(0, period).reduce((a, b) => a + b, 0);
-  const smMDM = mdm.slice(0, period).reduce((a, b) => a + b, 0);
+  const smTR = trs.slice(-period).reduce((a, b) => a + b, 0);
+  const smPDM = pdm.slice(-period).reduce((a, b) => a + b, 0);
+  const smMDM = mdm.slice(-period).reduce((a, b) => a + b, 0);
 
   if (smTR === 0) return 0;
   const pdi = (smPDM / smTR) * 100;

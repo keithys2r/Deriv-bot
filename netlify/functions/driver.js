@@ -366,12 +366,13 @@ async function runDigitDifferStrategy(token, app_id, settings, strategyName) {
   // Persist a marker BEFORE sending any buys, same crash-recovery
   // philosophy as every other strategy here - reconcileOrphanedDigitDifferBatch
   // is what notices and resolves this if the invocation dies mid-batch.
+  const placedAt = new Date().toISOString();
   await memory.setActiveTrade(STRATEGY_NAME, {
     digits,
     symbol,
     stake: perBetStake,
     contractIds: new Array(digits.length).fill(null),
-    placedAt: new Date().toISOString()
+    placedAt
   });
 
   const tradeAuth = await getOtpWebSocketUrl(token, app_id);
@@ -386,21 +387,46 @@ async function runDigitDifferStrategy(token, app_id, settings, strategyName) {
     }).catch((e) => console.log('Failed to persist digit-differ contract ID:', e.message));
   });
 
-  await memory.clearActiveTrade(STRATEGY_NAME);
-
+  // placeDigitDifferBatchAndWait's own 20s timeout RESOLVES (never rejects)
+  // for any bet that was bought but hasn't settled yet - those are real
+  // open contracts on Deriv, not failures. Clearing the marker for those
+  // would untrack them for good, so split settled results (recorded now,
+  // as before) from still-pending ones (re-marked so
+  // reconcileOrphanedDigitDifferBatch picks them up next run) before
+  // deciding whether to clear the marker at all.
   let totalProfit = 0;
   const summaries = [];
+  const pendingDigits = [];
+  const pendingContractIds = [];
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     if (r.error) {
-      console.log(`Digit ${digits[i]} bet failed: ${r.error}`);
-      summaries.push(`digit${digits[i]}: ERROR (${r.error})`);
+      if (r.contractPlaced) {
+        pendingDigits.push(digits[i]);
+        pendingContractIds.push(r.contractId);
+        summaries.push(`digit${digits[i]}: PENDING (${r.error})`);
+      } else {
+        console.log(`Digit ${digits[i]} bet failed: ${r.error}`);
+        summaries.push(`digit${digits[i]}: ERROR (${r.error})`);
+      }
       continue;
     }
     totalProfit += r.profit;
     const updatedState = await recordAndLogTrade(STRATEGY_NAME, `DIFF≠${digits[i]}`, symbol, perBetStake, r, null, null, undefined, 'digit_differ');
     summaries.push(`digit${digits[i]}: ${r.won ? 'WON' : 'LOST'} $${Math.abs(r.profit).toFixed(2)}`);
     await handlePostTradeRisk(STRATEGY_NAME, updatedState);
+  }
+
+  if (pendingContractIds.length > 0) {
+    await memory.setActiveTrade(STRATEGY_NAME, {
+      digits: pendingDigits,
+      symbol,
+      stake: perBetStake,
+      contractIds: pendingContractIds,
+      placedAt
+    });
+  } else {
+    await memory.clearActiveTrade(STRATEGY_NAME);
   }
 
   await maybeSendEODReport(STRATEGY_NAME);
