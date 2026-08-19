@@ -568,113 +568,6 @@ function getConfidenceScaleFactor(confidence) {
   return MIN_CONFIDENCE_FACTOR + c * (1 - MIN_CONFIDENCE_FACTOR);
 }
 
-// ---- Telegram supervisor state (global, not per-strategy) ----
-// The supervisor talks to a single human over a single Telegram chat, so
-// unlike everything else in this file, this state is NOT keyed by
-// strategy - a pending question about the accumulator strategy and a
-// pending approval about hybrid can't coexist without making it
-// ambiguous what a plain-text reply is actually answering.
-
-const SUPERVISOR_STATE_KEY = 'supervisor_state';
-const SUPERVISOR_CONVERSATION_MAX = 20;
-const PENDING_TTL_MS = 24 * 60 * 60 * 1000; // 24h - stale asks/proposals get dropped, not left in limbo forever
-
-function defaultSupervisorState() {
-  return {
-    lastReviewedSnapshot: null, // baseline the cheap skip-check compares against each run
-    lastRunAt: null,
-    conversationHistory: [], // capped, newest first - short recap fed back to the LLM for continuity
-    pendingQuestion: null,   // { id, text, askedAt, expiresAt } | null
-    pendingApproval: null    // { id, kind, proposedUpdate, humanSummary, proposedAt, expiresAt } | null
-  };
-}
-
-async function loadSupervisorState() {
-  const store = getMemoryStore();
-  const existing = await store.get(SUPERVISOR_STATE_KEY, { type: 'json' });
-  return Object.assign({}, defaultSupervisorState(), existing || {});
-}
-
-async function saveSupervisorState(state) {
-  const store = getMemoryStore();
-  await store.setJSON(SUPERVISOR_STATE_KEY, state);
-  return state;
-}
-
-function isPendingExpired(pending) {
-  if (!pending) return false;
-  return new Date(pending.expiresAt).getTime() < Date.now();
-}
-
-function hasLivePending(state) {
-  return (!!state.pendingQuestion && !isPendingExpired(state.pendingQuestion)) ||
-    (!!state.pendingApproval && !isPendingExpired(state.pendingApproval));
-}
-
-function makePendingId() {
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-}
-
-async function appendSupervisorConversation(role, text) {
-  const state = await loadSupervisorState();
-  state.conversationHistory = state.conversationHistory || [];
-  state.conversationHistory.unshift({ role, text, time: new Date().toISOString() });
-  state.conversationHistory = state.conversationHistory.slice(0, SUPERVISOR_CONVERSATION_MAX);
-  await saveSupervisorState(state);
-  return state;
-}
-
-// Enforces "one unresolved item at a time" here, not just at the call
-// site, so even a bug that calls this twice can't create a second
-// pending item a reply could ambiguously resolve.
-async function setPendingQuestion(text) {
-  const state = await loadSupervisorState();
-  if (hasLivePending(state)) {
-    return { ok: false, error: 'A question or approval is already pending.' };
-  }
-  const id = makePendingId();
-  state.pendingQuestion = {
-    id,
-    text,
-    askedAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + PENDING_TTL_MS).toISOString()
-  };
-  await saveSupervisorState(state);
-  return { ok: true, id };
-}
-
-async function clearPendingQuestion() {
-  const state = await loadSupervisorState();
-  state.pendingQuestion = null;
-  await saveSupervisorState(state);
-  return state;
-}
-
-async function setPendingApproval(kind, proposedUpdate, humanSummary) {
-  const state = await loadSupervisorState();
-  if (hasLivePending(state)) {
-    return { ok: false, error: 'A question or approval is already pending.' };
-  }
-  const id = makePendingId();
-  state.pendingApproval = {
-    id,
-    kind,
-    proposedUpdate,
-    humanSummary,
-    proposedAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + PENDING_TTL_MS).toISOString()
-  };
-  await saveSupervisorState(state);
-  return { ok: true, id };
-}
-
-async function clearPendingApproval() {
-  const state = await loadSupervisorState();
-  state.pendingApproval = null;
-  await saveSupervisorState(state);
-  return state;
-}
-
 module.exports = {
   loadState,
   saveState,
@@ -706,14 +599,5 @@ module.exports = {
   recordWeeklyTrade,
   getStakeScaleFactor,
   getLosingStreakScaleFactor,
-  getConfidenceScaleFactor,
-  loadSupervisorState,
-  saveSupervisorState,
-  isPendingExpired,
-  appendSupervisorConversation,
-  setPendingQuestion,
-  clearPendingQuestion,
-  setPendingApproval,
-  clearPendingApproval,
-  PENDING_TTL_MS
+  getConfidenceScaleFactor
 };
