@@ -29,5 +29,18 @@ module.exports = {
     // ADX 0 should clear literally any non-negative ceiling, including 0 itself.
     const result = strategy.getEntryDecision(flat, { adxPeriod: 14, adxMaxEntry: 0 });
     assert.strictEqual(result.canEnter, true);
+  },
+
+  'ticksToTakeProfitPct: matches the documented math at the default 1% growth rate'(assert) {
+    assert.ok(Math.abs(strategy.ticksToTakeProfitPct(0.01, 3) - 0.0303) < 0.0001);
+    assert.ok(Math.abs(strategy.ticksToTakeProfitPct(0.01, 4) - 0.0406) < 0.0001);
+  },
+
+  'ticksToTakeProfitPct: 0 ticks is 0% (boundary, even though the setting treats 0 as disabled upstream)'(assert) {
+    assert.strictEqual(strategy.ticksToTakeProfitPct(0.01, 0), 0);
+  },
+
+  'ticksToTakeProfitPct: not hardcoded to the default growth rate'(assert) {
+    assert.ok(Math.abs(strategy.ticksToTakeProfitPct(0.05, 3) - 0.157625) < 0.0001);
   }
 };

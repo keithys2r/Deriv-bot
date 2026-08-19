@@ -571,7 +571,11 @@ async function runAccumulatorStrategy(token, app_id, settings, strategyName) {
 
   const stake = await getScaledStake(STRATEGY_NAME, settings);
   const growthRate = settings.accumulatorGrowthRate || 0.01;
-  const takeProfit = parseFloat((stake * (settings.accumulatorTakeProfitPct || 0.05)).toFixed(2));
+  const targetTicks = settings.accumulatorTakeProfitTicks;
+  const takeProfitPct = (targetTicks && targetTicks > 0)
+    ? accumulatorStrategy.ticksToTakeProfitPct(growthRate, targetTicks)
+    : (settings.accumulatorTakeProfitPct || 0.05);
+  const takeProfit = parseFloat((stake * takeProfitPct).toFixed(2));
   const direction = `ACCU ${(growthRate * 100).toFixed(0)}%`;
 
   // Persist a marker BEFORE sending the buy, same as rise_fall does -
