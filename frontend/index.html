@@ -743,7 +743,7 @@
   <div class="log-panel" id="performancePanel" style="display:none;">
     <p class="log-header" id="perfTotalLine">All-time: --</p>
 
-    <p class="perf-section-label">By hour of day (UTC)</p>
+    <p class="perf-section-label">By hour of day (local time)</p>
     <div id="perfByHour" class="perf-list"></div>
 
     <p class="perf-section-label">By session (UTC, overlapping)</p>
@@ -803,21 +803,24 @@
   var selectedStrategy = 'accumulator';
   var statsLoaded = false;
 
-  // HH:MM:SS in the viewer's own local timezone (not UTC) - the browser
-  // already knows this via Date's local getters, no server-side
-  // timezone/location knowledge needed. Hand-formatted (not
-  // toLocaleTimeString) so it stays a fixed-width 24h HH:MM:SS matching
-  // this dashboard's monospace terminal look, instead of a
-  // locale-dependent "3:45:12 PM" that would vary in length.
-  function fmtLocalHMS(d) {
-    var hh = String(d.getHours()).padStart(2, '0');
+  // 12-hour H:MM(:SS) AM/PM in the viewer's own local timezone (not
+  // UTC/24h) - the browser already knows this via Date's local getters,
+  // no server-side timezone/location knowledge needed. Hand-formatted
+  // (not toLocaleTimeString) to keep the AM/PM placement consistent
+  // regardless of the browser's locale.
+  function fmtLocal12h(d, includeSeconds) {
+    var h = d.getHours();
+    var period = h >= 12 ? 'PM' : 'AM';
+    var h12 = h % 12;
+    if (h12 === 0) h12 = 12;
     var mm = String(d.getMinutes()).padStart(2, '0');
-    var ss = String(d.getSeconds()).padStart(2, '0');
-    return hh + ':' + mm + ':' + ss;
+    var out = h12 + ':' + mm;
+    if (includeSeconds) out += ':' + String(d.getSeconds()).padStart(2, '0');
+    return out + ' ' + period;
   }
 
   function updateClock() {
-    document.getElementById('clock').textContent = fmtLocalHMS(new Date()) + ' LOCAL';
+    document.getElementById('clock').textContent = fmtLocal12h(new Date(), true) + ' LOCAL';
   }
   setInterval(updateClock, 1000);
   updateClock();
@@ -835,7 +838,29 @@
   // (memory.js uses new Date().toISOString() throughout) - converting
   // to local here is purely a display concern, no backend change needed.
   function fmtTime(iso) {
-    return fmtLocalHMS(new Date(iso));
+    return fmtLocal12h(new Date(iso), true);
+  }
+
+  // Converts a UTC hour bucket (0-23, as stored/aggregated server-side
+  // in memory.js's computeStats) into a local-time 12h range label for
+  // display, e.g. UTC hour 3 might read "10:00-10:59 PM" in EST.
+  // Anchored to today's date (not a fixed reference date) so the
+  // offset reflects whichever side of a DST transition is currently
+  // active for the viewer's zone.
+  function fmtHourRangeLocal(utcHour) {
+    var now = new Date();
+    var start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, 0, 0));
+    var end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, 59, 0));
+    function h12(d) {
+      var h = d.getHours() % 12;
+      return h === 0 ? 12 : h;
+    }
+    var startPeriod = start.getHours() >= 12 ? 'PM' : 'AM';
+    var endPeriod = end.getHours() >= 12 ? 'PM' : 'AM';
+    if (startPeriod === endPeriod) {
+      return h12(start) + ':00-' + h12(end) + ':59 ' + endPeriod;
+    }
+    return h12(start) + ':00 ' + startPeriod + '-' + h12(end) + ':59 ' + endPeriod;
   }
 
   function render(data) {
@@ -1197,7 +1222,7 @@
         document.getElementById('perfTotalLine').textContent = totalLine;
 
         renderPerfList('perfByHour', data.byHour, function(h) {
-          return h + ':00-' + h + ':59 UTC';
+          return fmtHourRangeLocal(parseInt(h, 10));
         });
 
         renderPerfList('perfBySession', data.bySession || {}, function(s) {
