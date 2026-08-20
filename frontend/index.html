@@ -746,6 +746,9 @@
     <p class="perf-section-label">By hour of day (UTC)</p>
     <div id="perfByHour" class="perf-list"></div>
 
+    <p class="perf-section-label">By session (UTC, overlapping)</p>
+    <div id="perfBySession" class="perf-list"></div>
+
     <p class="perf-section-label" id="perfRegimeLabel">By regime</p>
     <div id="perfByRegime" class="perf-list"></div>
 
@@ -1181,6 +1184,10 @@
 
         renderPerfList('perfByHour', data.byHour, function(h) {
           return h + ':00-' + h + ':59 UTC';
+        });
+
+        renderPerfList('perfBySession', data.bySession || {}, function(s) {
+          return s;
         });
 
         var regimeLabel = document.getElementById('perfRegimeLabel');

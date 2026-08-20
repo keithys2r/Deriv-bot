@@ -400,12 +400,36 @@ async function getTradeHistory(strategyName) {
   }
 }
 
-// Aggregates the full trade history into win rate by hour, by regime,
-// and by symbol - the actual "when does this bot perform best" answer.
+// Real forex trading sessions (UTC), deliberately overlapping the way
+// they actually do in practice (e.g. London/New York both cover
+// 13:00-17:00) - a trade in an overlap window counts toward both
+// sessions' stats, since the goal is "does the bot do well during
+// London hours", not a clean partition of the day. Synthetic indices
+// trade 24/7 with no real session-driven liquidity of their own, but
+// the bot's own historical performance still varies by time of day
+// (already visible in byHour below), so this just re-slices the same
+// underlying data into named, human-recognizable windows.
+const SESSIONS = [
+  { key: 'sydney', label: 'Sydney', start: 22, end: 7 },
+  { key: 'tokyo', label: 'Tokyo', start: 0, end: 9 },
+  { key: 'london', label: 'London', start: 8, end: 17 },
+  { key: 'newyork', label: 'New York', start: 13, end: 22 }
+];
+
+// Handles sessions that wrap past midnight (e.g. Sydney 22:00-07:00).
+function hourInSession(hour, start, end) {
+  if (start <= end) return hour >= start && hour < end;
+  return hour >= start || hour < end;
+}
+
+// Aggregates the full trade history into win rate by hour, by session,
+// by regime, and by symbol - the actual "when does this bot perform
+// best" answer.
 async function computeStats(strategyName) {
   const history = await getTradeHistory(strategyName);
 
   const byHour = {}; // hour (0-23) -> { wins, losses, profit }
+  const bySession = {}; // 'Sydney' | 'Tokyo' | 'London' | 'New York' -> { wins, losses, profit } - overlapping, a trade can count toward more than one
   const byRegime = {}; // 'trend' | 'range' -> { wins, losses, profit }
   const bySymbol = {}; // symbol -> { wins, losses, profit }
   const byExitReason = {}; // accumulator only: 'take_profit' | 'knockout' | 'timeout' -> { wins, losses, profit }
@@ -427,6 +451,16 @@ async function computeStats(strategyName) {
     if (!bySymbol[symbolKey]) bySymbol[symbolKey] = { wins: 0, losses: 0, profit: 0 };
 
     const p = Number.isFinite(t.profit) ? t.profit : 0;
+
+    if (Number.isInteger(hourKey)) {
+      SESSIONS.forEach((session) => {
+        if (!hourInSession(hourKey, session.start, session.end)) return;
+        if (!bySession[session.label]) bySession[session.label] = { wins: 0, losses: 0, profit: 0 };
+        if (t.won) bySession[session.label].wins++;
+        else bySession[session.label].losses++;
+        bySession[session.label].profit += p;
+      });
+    }
 
     if (t.exitReason) {
       if (!byExitReason[t.exitReason]) byExitReason[t.exitReason] = { wins: 0, losses: 0, profit: 0 };
@@ -488,6 +522,7 @@ async function computeStats(strategyName) {
     totalProfit,
     avgHoldSeconds: holdSecondsCount > 0 ? holdSecondsSum / holdSecondsCount : null,
     byHour: withWinRate(byHour),
+    bySession: withWinRate(bySession),
     byRegime: withWinRate(byRegime),
     bySymbol: withWinRate(bySymbol),
     byExitReason: withWinRate(byExitReason),
@@ -609,6 +644,8 @@ module.exports = {
   recordTradeHistory,
   getTradeHistory,
   computeStats,
+  hourInSession,
+  SESSIONS,
   getWeekStartUTC,
   loadWeeklyState,
   saveWeeklyState,
