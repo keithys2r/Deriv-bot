@@ -22,10 +22,22 @@ function stripToNumeric(raw) {
 // Shared with telegram-webhook.js, so a stake change via Telegram is
 // held to exactly the same 20%-of-stop-loss rule as one made from the
 // dashboard, instead of two copies of this rule silently drifting apart.
+// Deriv's actual enforced minimum stake for these contract types,
+// confirmed from a live buy rejection ("Please enter a stake amount
+// that's at least 1.00"). Shared with driver.js's DERIV_MIN_STAKE
+// constant in spirit (kept as a separate literal here since settings.js
+// and driver.js don't otherwise share constants) - rejecting a
+// sub-$1 stake at save time means the dashboard can't configure a
+// stake that's guaranteed to fail every buy.
+const DERIV_MIN_STAKE = 1.00;
+
 function validateStakeAmount(rawStake, dailyStopLoss) {
   const stake = parseFloat(stripToNumeric(rawStake));
   if (!Number.isFinite(stake) || stake <= 0) {
     return { ok: false, error: 'Stake must be greater than 0' };
+  }
+  if (stake < DERIV_MIN_STAKE) {
+    return { ok: false, error: `Stake must be at least $${DERIV_MIN_STAKE.toFixed(2)} - Deriv rejects anything smaller.` };
   }
   const maxStake = dailyStopLoss * 0.2;
   if (stake > maxStake) {

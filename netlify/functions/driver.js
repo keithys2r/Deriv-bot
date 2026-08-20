@@ -301,6 +301,10 @@ async function runAccumulatorStrategy(token, app_id, settings, strategyName) {
   }
 
   const stake = await getScaledStake(STRATEGY_NAME, settings);
+  if (stake === null) {
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: 'Trade skipped - dailyStopLoss is too low to produce a safe, Deriv-legal stake this run' });
+  }
   const growthRate = settings.accumulatorGrowthRate || 0.01;
   const targetTicks = settings.accumulatorTakeProfitTicks;
   const takeProfitPct = (targetTicks && targetTicks > 0)
@@ -387,7 +391,20 @@ async function runDigitDifferStrategy(token, app_id, settings, strategyName) {
   // however many digits are excluded, surprising given every other
   // strategy's stake setting means "total risk per trade").
   const totalStake = await getScaledStake(STRATEGY_NAME, settings);
+  if (totalStake === null) {
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: 'Trade skipped - dailyStopLoss is too low to produce a safe, Deriv-legal stake this run' });
+  }
   const perBetStake = Math.round((totalStake / digits.length) * 100) / 100;
+  if (perBetStake < DERIV_MIN_STAKE) {
+    // Splitting an otherwise-fine totalStake across N excluded digits can
+    // itself push each individual contract below Deriv's minimum, even
+    // when totalStake alone would have been fine - Deriv enforces the
+    // minimum PER contract, not on the combined total.
+    console.log(`WARNING: totalStake $${totalStake} split across ${digits.length} digits gives $${perBetStake.toFixed(2)}/bet, below Deriv's $${DERIV_MIN_STAKE.toFixed(2)} minimum - skipping. Raise stakeAmount or lower digitDifferExcludeCount.`);
+    await maybeSendEODReport(STRATEGY_NAME);
+    return respond({ message: `Trade skipped - $${totalStake} split ${digits.length} ways gives $${perBetStake.toFixed(2)}/bet, below Deriv's $${DERIV_MIN_STAKE.toFixed(2)} minimum` });
+  }
 
   const bets = digits.map((digit) => ({ digit, stake: perBetStake, symbol, duration: 1, duration_unit: 't' }));
 
@@ -617,6 +634,13 @@ function pickHybridBucket(adx, accumulatorCeiling) {
 
 // ---- Shared helpers ----
 
+// Deriv's actual enforced minimum stake for these contract types -
+// confirmed directly from a live buy rejection ("Please enter a stake
+// amount that's at least 1.00"). The old $0.35 floor was below this, so
+// any scaled-down stake under $1 was silently guaranteed to fail at the
+// buy step every single time, not just occasionally.
+const DERIV_MIN_STAKE = 1.00;
+
 // Applies three independent, purely-DOWNWARD-scaling factors to the base
 // stake: weekly de-risking (protects gains as the weekly goal nears),
 // losing-streak de-risking (backs off smoothly instead of trading full
@@ -624,9 +648,12 @@ function pickHybridBucket(adx, accumulatorCeiling) {
 // confidence (no current strategy produces a confidence score - kept as
 // an optional no-op hook for a future one that does). All three are
 // <= 1.0 and multiply together, so the scaled-down result can never
-// exceed baseStake. The $0.35 floor below is clamped to the 20%-of-
-// dailyStopLoss safety limit too, so a very low dailyStopLoss can't let
-// the floor push a trade above that limit.
+// exceed baseStake. The DERIV_MIN_STAKE floor below is itself clamped to
+// the 20%-of-dailyStopLoss safety limit, so a very low dailyStopLoss
+// can't let the floor push a trade above that limit - but if the two
+// genuinely conflict (20% of dailyStopLoss is below what Deriv will even
+// accept), there's no stake that satisfies both, so this returns null
+// rather than silently breaking one of them.
 async function getScaledStake(strategyName, settings, confidence) {
   const baseStake = parseFloat(settings.stakeAmount || 1);
 
@@ -646,23 +673,24 @@ async function getScaledStake(strategyName, settings, confidence) {
 
   const combinedFactor = weeklyFactor * losingStreakFactor * confidenceFactor;
 
-  if (combinedFactor < 1.0) {
-    // Deriv rejects a price with more than 2 decimal places - the three
-    // factors above multiply to an essentially-never-clean float (unlike
-    // the old single weekly-only factor, which was always a round
-    // fraction), so this MUST be rounded before being sent as a trade
-    // price, not just for display. Round after the $0.35 floor so the
-    // floor itself can't get nudged back under by rounding.
-    const maxSafeStake = settings.dailyStopLoss > 0 ? settings.dailyStopLoss * 0.2 : baseStake;
-    const floor = Math.min(0.35, maxSafeStake);
-    if (floor < 0.35) {
-      console.log(`Stake floor reduced from $0.35 to $${floor.toFixed(2)} to respect the 20%-of-dailyStopLoss safety clamp (dailyStopLoss=$${settings.dailyStopLoss}).`);
-    }
-    const scaledStake = Math.round(Math.max(floor, baseStake * combinedFactor) * 100) / 100;
-    console.log(`Stake scaled: weekly=${weeklyFactor.toFixed(2)} (${weeklyProfitGoal ? (weeklyNet / weeklyProfitGoal * 100).toFixed(0) + '%' : 'n/a'}) losingStreak=${losingStreakFactor.toFixed(2)} (${state.consecutiveLosses || 0} losses) confidence=${confidenceFactor.toFixed(2)} -> $${baseStake} to $${scaledStake.toFixed(2)}`);
-    return scaledStake;
+  if (combinedFactor >= 1.0) return baseStake;
+
+  const maxSafeStake = settings.dailyStopLoss > 0 ? settings.dailyStopLoss * 0.2 : baseStake;
+  if (maxSafeStake < DERIV_MIN_STAKE) {
+    console.log(`WARNING: dailyStopLoss ($${settings.dailyStopLoss}) is too low to trade safely - the 20% safety clamp ($${maxSafeStake.toFixed(2)}) is below Deriv's $${DERIV_MIN_STAKE.toFixed(2)} minimum stake. Raise dailyStopLoss to at least $${(DERIV_MIN_STAKE / 0.2).toFixed(2)} to trade. Skipping this run.`);
+    return null;
   }
-  return baseStake;
+
+  // Deriv rejects a price with more than 2 decimal places - the three
+  // factors above multiply to an essentially-never-clean float (unlike
+  // the old single weekly-only factor, which was always a round
+  // fraction), so this MUST be rounded before being sent as a trade
+  // price, not just for display. Round after the floor so the floor
+  // itself can't get nudged back under by rounding.
+  const floor = Math.min(DERIV_MIN_STAKE, maxSafeStake);
+  const scaledStake = Math.round(Math.max(floor, baseStake * combinedFactor) * 100) / 100;
+  console.log(`Stake scaled: weekly=${weeklyFactor.toFixed(2)} (${weeklyProfitGoal ? (weeklyNet / weeklyProfitGoal * 100).toFixed(0) + '%' : 'n/a'}) losingStreak=${losingStreakFactor.toFixed(2)} (${state.consecutiveLosses || 0} losses) confidence=${confidenceFactor.toFixed(2)} -> $${baseStake} to $${scaledStake.toFixed(2)}`);
+  return scaledStake;
 }
 
 async function handleRiskGate(strategyName) {
