@@ -17,6 +17,7 @@ async function checkCanTrade(strategyName) {
   const maxConsecutiveLosses = settings.maxConsecutiveLosses;
   const cooldownMinutes = settings.cooldownMinutes;
   const cooldownEnabled = settings.cooldownEnabled !== false;
+  const testModeEnabled = settings.testModeEnabled === true;
 
   // 0. Manual pause - user hit STOP on the frontend, overrides everything else
   if (state.manualPause) {
@@ -58,40 +59,47 @@ async function checkCanTrade(strategyName) {
     await memory.saveState(strategyName, state);
   }
 
-  // 2. Check daily profit goal - based on NET profit (wins minus
-  // losses), matching what's actually happened to the account. Checking
-  // gross wins alone would let this trigger even while net flat or down,
-  // since losses were never subtracted from that number.
-  const netProfit = state.dailyProfit - state.dailyLoss;
-  if (netProfit >= dailyProfitGoal) {
-    return {
-      canTrade: false,
-      reason: `Daily profit goal hit ($${netProfit.toFixed(2)} net >= $${dailyProfitGoal})`,
-      state
-    };
-  }
+  // 2/2b/3 are all skipped in test mode - manualPause and the
+  // consecutive-loss cooldown (checks 0/1/4) still apply, this only
+  // disables the "stop while ahead/behind" checks so a deliberate test
+  // run (e.g. comparing session performance) isn't cut short partway
+  // through by a goal or stop-loss hit.
+  if (!testModeEnabled) {
+    // 2. Check daily profit goal - based on NET profit (wins minus
+    // losses), matching what's actually happened to the account. Checking
+    // gross wins alone would let this trigger even while net flat or down,
+    // since losses were never subtracted from that number.
+    const netProfit = state.dailyProfit - state.dailyLoss;
+    if (netProfit >= dailyProfitGoal) {
+      return {
+        canTrade: false,
+        reason: `Daily profit goal hit ($${netProfit.toFixed(2)} net >= $${dailyProfitGoal})`,
+        state
+      };
+    }
 
-  // 2b. Weekly profit goal - once fully hit, pause for the rest of the
-  // week rather than keep pushing. Same "stop while ahead" logic as the
-  // daily goal, just at a longer horizon.
-  const weeklyState = await memory.loadWeeklyState(strategyName);
-  const weeklyNet = weeklyState.weeklyProfit - weeklyState.weeklyLoss;
-  const weeklyProfitGoal = settings.weeklyProfitGoal;
-  if (weeklyProfitGoal && weeklyNet >= weeklyProfitGoal) {
-    return {
-      canTrade: false,
-      reason: `Weekly profit goal hit ($${weeklyNet.toFixed(2)} net >= $${weeklyProfitGoal}) - paused until next week`,
-      state
-    };
-  }
+    // 2b. Weekly profit goal - once fully hit, pause for the rest of the
+    // week rather than keep pushing. Same "stop while ahead" logic as the
+    // daily goal, just at a longer horizon.
+    const weeklyState = await memory.loadWeeklyState(strategyName);
+    const weeklyNet = weeklyState.weeklyProfit - weeklyState.weeklyLoss;
+    const weeklyProfitGoal = settings.weeklyProfitGoal;
+    if (weeklyProfitGoal && weeklyNet >= weeklyProfitGoal) {
+      return {
+        canTrade: false,
+        reason: `Weekly profit goal hit ($${weeklyNet.toFixed(2)} net >= $${weeklyProfitGoal}) - paused until next week`,
+        state
+      };
+    }
 
-  // 3. Check daily stop loss
-  if (state.dailyLoss >= dailyStopLoss) {
-    return {
-      canTrade: false,
-      reason: `Daily stop loss hit ($${state.dailyLoss.toFixed(2)} >= $${dailyStopLoss})`,
-      state
-    };
+    // 3. Check daily stop loss
+    if (state.dailyLoss >= dailyStopLoss) {
+      return {
+        canTrade: false,
+        reason: `Daily stop loss hit ($${state.dailyLoss.toFixed(2)} >= $${dailyStopLoss})`,
+        state
+      };
+    }
   }
 
   // 4. Check consecutive losses -> trigger new cooldown (only if enabled)

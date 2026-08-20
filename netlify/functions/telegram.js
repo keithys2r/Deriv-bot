@@ -125,6 +125,18 @@ async function alertEODReport(strategyName, state) {
   );
 }
 
+async function alertTestModeChanged(strategyName, enabled) {
+  return enabled
+    ? sendMessage(
+        `${EMOJI_STOP} Test mode ENABLED\n` +
+        `Strategy: <b>${strategyName}</b>\n` +
+        `Daily/weekly profit goal and daily stop loss are now IGNORED. ` +
+        `Manual STOP and the consecutive-loss cooldown still apply.\n` +
+        `Turn this off in Settings when your test is done.`
+      )
+    : sendMessage(`${EMOJI_CHECK} Test mode disabled\nStrategy: <b>${strategyName}</b>\nDaily/weekly profit goal and daily stop loss are enforced again.`);
+}
+
 async function alertTradeResult(strategyName, direction, symbol, stake, won, profit) {
   const resultEmoji = won ? EMOJI_CHECK : EMOJI_STOP;
   const resultText = won ? 'WON' : 'LOST';
@@ -146,5 +158,6 @@ module.exports = {
   alertWeeklyGoalHit,
   alertStopLossHit,
   alertEODReport,
-  alertTradeResult
+  alertTradeResult,
+  alertTestModeChanged
 };
