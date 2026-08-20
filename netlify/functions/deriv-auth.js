@@ -25,12 +25,18 @@ const EMPTY_ACCOUNTS_MAX_ATTEMPTS = 2; // fixed, independent of RETRY_DELAYS_MS 
                                         // the two retry loops multiply together
 
 const OTP_NOT_FOUND_RETRY_DELAY_MS = 400;
-const OTP_NOT_FOUND_MAX_ATTEMPTS = 3; // Deriv's account/wallet routing has been observed
+const OTP_NOT_FOUND_MAX_ATTEMPTS = 2; // Deriv's account/wallet routing has been observed
                                        // in practice to lag briefly - an OTP 404
                                        // "AccountNotFound" for an account_id the accounts
                                        // endpoint JUST listed moments earlier is that lag,
                                        // not a genuinely bad account (same category of
                                        // transient hiccup as the empty-accounts case above).
+                                       // One retry, not two - matches RETRY_DELAYS_MS's own
+                                       // "one retry" philosophy, so this doesn't compound with
+                                       // fetchWithRetry's own retry and blow past the ~30s
+                                       // budget a single getOtpWebSocketUrl call should stay
+                                       // well under (driver.js can call this multiple times
+                                       // per invocation).
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
