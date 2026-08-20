@@ -46,5 +46,29 @@ module.exports = {
   'getConfidenceScaleFactor: clamps out-of-range input'(assert) {
     assert.strictEqual(memory.getConfidenceScaleFactor(1.5), 1.0);
     assert.strictEqual(memory.getConfidenceScaleFactor(-1), 0.5);
+  },
+
+  'hourInSession: simple non-wrapping range (London 08-17)'(assert) {
+    assert.strictEqual(memory.hourInSession(8, 8, 17), true);
+    assert.strictEqual(memory.hourInSession(16, 8, 17), true);
+    assert.strictEqual(memory.hourInSession(17, 8, 17), false); // end is exclusive
+    assert.strictEqual(memory.hourInSession(7, 8, 17), false);
+  },
+
+  'hourInSession: midnight-wrapping range (Sydney 22-07)'(assert) {
+    assert.strictEqual(memory.hourInSession(23, 22, 7), true);
+    assert.strictEqual(memory.hourInSession(0, 22, 7), true);
+    assert.strictEqual(memory.hourInSession(6, 22, 7), true);
+    assert.strictEqual(memory.hourInSession(7, 22, 7), false); // end is exclusive
+    assert.strictEqual(memory.hourInSession(12, 22, 7), false);
+  },
+
+  'hourInSession: overlapping sessions both match the same hour'(assert) {
+    // 14:00 UTC falls in both London (08-17) and New York (13-22) -
+    // the overlap is deliberate, not a bug (see SESSIONS' comment).
+    const london = memory.SESSIONS.find((s) => s.key === 'london');
+    const newyork = memory.SESSIONS.find((s) => s.key === 'newyork');
+    assert.strictEqual(memory.hourInSession(14, london.start, london.end), true);
+    assert.strictEqual(memory.hourInSession(14, newyork.start, newyork.end), true);
   }
 };
