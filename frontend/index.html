@@ -803,9 +803,21 @@
   var selectedStrategy = 'accumulator';
   var statsLoaded = false;
 
+  // HH:MM:SS in the viewer's own local timezone (not UTC) - the browser
+  // already knows this via Date's local getters, no server-side
+  // timezone/location knowledge needed. Hand-formatted (not
+  // toLocaleTimeString) so it stays a fixed-width 24h HH:MM:SS matching
+  // this dashboard's monospace terminal look, instead of a
+  // locale-dependent "3:45:12 PM" that would vary in length.
+  function fmtLocalHMS(d) {
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    var ss = String(d.getSeconds()).padStart(2, '0');
+    return hh + ':' + mm + ':' + ss;
+  }
+
   function updateClock() {
-    var now = new Date();
-    document.getElementById('clock').textContent = now.toUTCString().slice(17, 25) + ' UTC';
+    document.getElementById('clock').textContent = fmtLocalHMS(new Date()) + ' LOCAL';
   }
   setInterval(updateClock, 1000);
   updateClock();
@@ -819,9 +831,11 @@
     return sign + '$' + Math.abs(n).toFixed(2);
   }
 
+  // Trade/log timestamps are stored server-side as UTC ISO strings
+  // (memory.js uses new Date().toISOString() throughout) - converting
+  // to local here is purely a display concern, no backend change needed.
   function fmtTime(iso) {
-    var d = new Date(iso);
-    return d.toUTCString().slice(17, 25);
+    return fmtLocalHMS(new Date(iso));
   }
 
   function render(data) {
