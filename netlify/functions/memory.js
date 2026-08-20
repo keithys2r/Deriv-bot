@@ -530,7 +530,15 @@ async function computeStats(strategyName) {
     byRegime: withWinRate(byRegime),
     bySymbol: withWinRate(bySymbol),
     byExitReason: withWinRate(byExitReason),
-    bySubStrategy: withWinRate(bySubStrategy)
+    bySubStrategy: withWinRate(bySubStrategy),
+    // Compact per-trade tuples (timestamp + win/loss only, not the full
+    // record) for the dashboard's trade calendar. Deliberately NOT
+    // pre-bucketed by day server-side - the server has no idea what
+    // timezone the viewer is in, and a UTC calendar day doesn't line up
+    // with the viewer's actual calendar day. Bucketing by local date is
+    // trivial client-side (same pattern as fmtHourRangeLocal) and this
+    // stays correct without guessing at a timezone.
+    dailyTrades: history.map((t) => ({ t: t.time, w: !!t.won }))
   };
 }
 
