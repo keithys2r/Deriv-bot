@@ -905,6 +905,11 @@
   var statsLoaded = false;
   var calendarDailyTrades = []; // raw {t, w} tuples from the last /stats load
   var calendarMonthOffset = 0;  // 0 = current month, -1 = previous month, etc.
+  // True from the moment the user picks a strategy in the toggle until it's
+  // actually saved (or the settings panel is freshly reloaded) - guards
+  // against the 5s status poll's render() overwriting an in-progress,
+  // not-yet-saved selection back to whatever's still active on the server.
+  var strategyDirty = false;
 
   // 12-hour H:MM(:SS) AM/PM in the viewer's own local timezone (not
   // UTC/24h) - the browser already knows this via Date's local getters,
@@ -975,7 +980,7 @@
     var dot = document.getElementById('statusDot');
     var statusText = document.getElementById('statusText');
 
-    if (data.activeStrategy) selectedStrategy = data.activeStrategy;
+    if (data.activeStrategy && !strategyDirty) selectedStrategy = data.activeStrategy;
     var strategyLabel = STRATEGY_LABELS[data.activeStrategy] || 'ACCUMULATOR';
     document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 DEMO';
     updateTestModeBanner(data.testModeEnabled === true);
@@ -1167,6 +1172,7 @@
 
   function renderSettings(settings, allowedSymbols) {
     selectedStrategy = settings.activeStrategy || 'accumulator';
+    strategyDirty = false; // fresh sync from the server - any prior pending pick is moot
     updateStrategyToggleUI();
 
     document.getElementById('stakeInput').value = settings.stakeAmount;
@@ -1266,14 +1272,17 @@
 
   document.getElementById('accumulatorBtn').addEventListener('click', function() {
     selectedStrategy = 'accumulator';
+    strategyDirty = true;
     updateStrategyToggleUI();
   });
   document.getElementById('digitDifferBtn').addEventListener('click', function() {
     selectedStrategy = 'digit_differ';
+    strategyDirty = true;
     updateStrategyToggleUI();
   });
   document.getElementById('hybridBtn').addEventListener('click', function() {
     selectedStrategy = 'hybrid';
+    strategyDirty = true;
     updateStrategyToggleUI();
   });
 
