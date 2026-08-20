@@ -243,10 +243,16 @@ function defaultSettings() {
     maxConsecutiveLosses: 3,
     cooldownMinutes: 15,
     cooldownEnabled: true,
-    testModeEnabled: false // when true, risk.js skips dailyProfitGoal/weeklyProfitGoal/
+    testModeEnabled: false, // when true, risk.js skips dailyProfitGoal/weeklyProfitGoal/
                             // dailyStopLoss so a testing run isn't cut short - manualPause
                             // (STOP button) and the consecutive-loss cooldown still apply,
                             // this only disables the "stop while ahead/behind" checks.
+    dynamicSizingEnabled: true // when false, driver.js's getScaledStake skips the
+                            // weekly/losing-streak/confidence factors entirely and always
+                            // trades the flat configured stakeAmount - useful for collecting
+                            // a clean, apples-to-apples data sample (e.g. for the by-hour/
+                            // by-session/calendar breakdowns) without stake size itself
+                            // varying trade to trade and muddying the comparison.
   };
 }
 

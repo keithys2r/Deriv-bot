@@ -657,6 +657,12 @@ const DERIV_MIN_STAKE = 1.00;
 async function getScaledStake(strategyName, settings, confidence) {
   const baseStake = parseFloat(settings.stakeAmount || 1);
 
+  // Paused: always trade the flat configured stake, no weekly/losing-
+  // streak/confidence adjustment - keeps stake size constant across
+  // trades so time-of-day/session/calendar breakdowns aren't muddied by
+  // stake size itself varying while collecting a data sample.
+  if (settings.dynamicSizingEnabled === false) return baseStake;
+
   const weeklyProfitGoal = settings.weeklyProfitGoal;
   let weeklyFactor = 1.0;
   let weeklyNet = 0;

@@ -807,6 +807,11 @@
     </div>
 
     <div class="checkbox-row" style="margin-top:12px;">
+      <input type="checkbox" id="dynamicSizingInput" checked>
+      <label for="dynamicSizingInput">Dynamic stake sizing (weekly/losing-streak scaling) - uncheck to pause it and always trade your flat configured stake, e.g. while collecting a clean data sample</label>
+    </div>
+
+    <div class="checkbox-row" style="margin-top:12px;">
       <input type="checkbox" id="testModeInput">
       <label for="testModeInput" style="color:var(--red);">Test mode - IGNORES daily/weekly profit goal and daily stop loss, so a test run isn't cut short. Manual STOP and the loss-streak cooldown still work. Turn this off when you're done testing.</label>
     </div>
@@ -1179,6 +1184,7 @@
     document.getElementById('cooldownInput').value = settings.cooldownMinutes;
     document.getElementById('weeklyGoalInput').value = settings.weeklyProfitGoal || 100;
     document.getElementById('cooldownEnabledInput').checked = settings.cooldownEnabled !== false;
+    document.getElementById('dynamicSizingInput').checked = settings.dynamicSizingEnabled !== false;
     document.getElementById('testModeInput').checked = settings.testModeEnabled === true;
     updateTestModeBanner(settings.testModeEnabled === true);
     document.getElementById('autoSelectInput').checked = settings.autoSelectSymbol === true;
@@ -1524,6 +1530,7 @@
       cooldownMinutes: parseInt(document.getElementById('cooldownInput').value),
       weeklyProfitGoal: parseFloat(document.getElementById('weeklyGoalInput').value),
       cooldownEnabled: document.getElementById('cooldownEnabledInput').checked,
+      dynamicSizingEnabled: document.getElementById('dynamicSizingInput').checked,
       testModeEnabled: document.getElementById('testModeInput').checked,
       autoSelectSymbol: document.getElementById('autoSelectInput').checked,
       watchlist: Array.prototype.map.call(document.querySelectorAll('#watchlistGrid .symbol-chip.selected'), function(c) { return c.getAttribute('data-symbol'); })
