@@ -131,6 +131,7 @@ exports.handler = async function (event) {
       }
       if (typeof body.cooldownEnabled === 'boolean') update.cooldownEnabled = body.cooldownEnabled;
       if (typeof body.testModeEnabled === 'boolean') update.testModeEnabled = body.testModeEnabled;
+      if (typeof body.dynamicSizingEnabled === 'boolean') update.dynamicSizingEnabled = body.dynamicSizingEnabled;
 
       // Stake validation - a single trade shouldn't be able to eat more
       // than 20% of whatever the daily stop loss ends up being (using the
