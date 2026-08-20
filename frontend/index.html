@@ -508,6 +508,82 @@
     color: var(--ink-dim);
   }
 
+  .calendar-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .calendar-nav button {
+    padding: 6px 10px;
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--ink-dim);
+    border-radius: 6px;
+  }
+
+  .calendar-nav button:disabled {
+    opacity: 0.25;
+  }
+
+  .calendar-month-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+  }
+
+  .calendar-dow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-dim);
+    text-align: center;
+    text-transform: uppercase;
+    padding-bottom: 2px;
+  }
+
+  .calendar-day {
+    aspect-ratio: 1;
+    border-radius: 6px;
+    background: var(--void);
+    border: 1px solid var(--panel-border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .calendar-day.empty {
+    border: none;
+    background: transparent;
+  }
+
+  .calendar-day-num {
+    font-size: 10px;
+    color: var(--ink-dim);
+  }
+
+  .calendar-day-count {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .calendar-day.no-trades .calendar-day-count { color: var(--ink-dim); }
+  .calendar-day.high { background: rgba(58, 219, 118, 0.12); border-color: rgba(58, 219, 118, 0.4); }
+  .calendar-day.mid { background: rgba(255, 180, 84, 0.10); border-color: rgba(255, 180, 84, 0.35); }
+  .calendar-day.low { background: rgba(255, 92, 92, 0.12); border-color: rgba(255, 92, 92, 0.4); }
+
   /* Everything above is unchanged from the phone layout - .wrap stays a
      single 480px-capped column by default. From here up, there's room
      for two columns side by side instead of one long scroll, so status/
@@ -543,6 +619,8 @@
     #liveLogPanel,
     #performanceToggle,
     #performancePanel,
+    #calendarToggle,
+    #calendarPanel,
     #errorLogToggle,
     #errorLogPanel {
       grid-column: 2;
@@ -756,6 +834,18 @@
     <div id="perfBySymbol" class="perf-list"></div>
   </div>
 
+  <button class="settings-toggle" id="calendarToggle" style="margin-top:12px;">Trade calendar &#9662;</button>
+
+  <div class="log-panel" id="calendarPanel" style="display:none;">
+    <div class="calendar-nav">
+      <button type="button" id="calendarPrevBtn">&#8592;</button>
+      <span class="calendar-month-label" id="calendarMonthLabel">--</span>
+      <button type="button" id="calendarNextBtn">&#8594;</button>
+    </div>
+    <div class="calendar-grid" id="calendarGrid"></div>
+    <p class="settings-note" style="margin-top:8px;">Shaded by that day's win rate; number is trades placed. Grouped by your local calendar day.</p>
+  </div>
+
   <button class="settings-toggle" id="errorLogToggle" style="margin-top:12px;">Error log &#9662;</button>
 
   <div class="log-panel" id="errorLogPanel" style="display:none;">
@@ -802,6 +892,8 @@
   var currentSettings = null;
   var selectedStrategy = 'accumulator';
   var statsLoaded = false;
+  var calendarDailyTrades = []; // raw {t, w} tuples from the last /stats load
+  var calendarMonthOffset = 0;  // 0 = current month, -1 = previous month, etc.
 
   // 12-hour H:MM(:SS) AM/PM in the viewer's own local timezone (not
   // UTC/24h) - the browser already knows this via Date's local getters,
@@ -1205,6 +1297,99 @@
     }).join('');
   }
 
+  var MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  var DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  // Groups the raw {t, w} tuples by the VIEWER's local calendar date
+  // (not UTC) - each tuple's timestamp is parsed as a real Date, so
+  // .getFullYear()/.getMonth()/.getDate() naturally reflect local time,
+  // same approach as fmtHourRangeLocal uses for hour buckets.
+  function buildDailyMap(dailyTrades) {
+    var map = {};
+    dailyTrades.forEach(function(entry) {
+      var d = new Date(entry.t);
+      if (isNaN(d.getTime())) return;
+      var key = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate();
+      if (!map[key]) map[key] = { trades: 0, wins: 0 };
+      map[key].trades++;
+      if (entry.w) map[key].wins++;
+    });
+    return map;
+  }
+
+  function renderCalendar() {
+    var grid = document.getElementById('calendarGrid');
+    var label = document.getElementById('calendarMonthLabel');
+
+    var today = new Date();
+    var target = new Date(today.getFullYear(), today.getMonth() + calendarMonthOffset, 1);
+    var year = target.getFullYear();
+    var month = target.getMonth();
+
+    label.textContent = MONTH_NAMES[month] + ' ' + year;
+
+    var dailyMap = buildDailyMap(calendarDailyTrades);
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+    var firstDow = new Date(year, month, 1).getDay();
+
+    var cells = DOW_LABELS.map(function(d) {
+      return '<div class="calendar-dow">' + d + '</div>';
+    });
+
+    for (var i = 0; i < firstDow; i++) {
+      cells.push('<div class="calendar-day empty"></div>');
+    }
+
+    for (var day = 1; day <= daysInMonth; day++) {
+      var key = year + '-' + month + '-' + day;
+      var stats = dailyMap[key];
+      var cls = 'calendar-day';
+      var countHtml = '';
+      if (stats && stats.trades > 0) {
+        var winRate = (stats.wins / stats.trades) * 100;
+        cls += ' ' + winRateClass(winRate);
+        countHtml = '<span class="calendar-day-count">' + stats.trades + '</span>';
+      } else {
+        cls += ' no-trades';
+        countHtml = '<span class="calendar-day-count">&middot;</span>';
+      }
+      cells.push('<div class="' + cls + '"><span class="calendar-day-num">' + day + '</span>' + countHtml + '</div>');
+    }
+
+    grid.innerHTML = cells.join('');
+
+    // Bound navigation to months that actually have data, plus the
+    // current month - no point paging into empty history or the future.
+    var earliestKey = null;
+    calendarDailyTrades.forEach(function(entry) {
+      var d = new Date(entry.t);
+      if (isNaN(d.getTime())) return;
+      var monthKey = d.getFullYear() * 12 + d.getMonth();
+      if (earliestKey === null || monthKey < earliestKey) earliestKey = monthKey;
+    });
+    var targetKey = year * 12 + month;
+    var currentKey = today.getFullYear() * 12 + today.getMonth();
+    document.getElementById('calendarPrevBtn').disabled = (earliestKey !== null && targetKey <= earliestKey);
+    document.getElementById('calendarNextBtn').disabled = (targetKey >= currentKey);
+  }
+
+  document.getElementById('calendarPrevBtn').addEventListener('click', function() {
+    calendarMonthOffset--;
+    renderCalendar();
+  });
+
+  document.getElementById('calendarNextBtn').addEventListener('click', function() {
+    calendarMonthOffset++;
+    renderCalendar();
+  });
+
+  document.getElementById('calendarToggle').addEventListener('click', function() {
+    var panel = document.getElementById('calendarPanel');
+    var isHidden = panel.style.display === 'none';
+    panel.style.display = isHidden ? 'block' : 'none';
+    if (isHidden) loadStats(); // refresh data every time it's opened
+  });
+
   function loadStats() {
     fetch(STATS_URL + '?strategy=' + selectedStrategy)
       .then(function(r) { return r.json(); })
@@ -1258,6 +1443,10 @@
             });
           }
         }
+
+        calendarDailyTrades = data.dailyTrades || [];
+        calendarMonthOffset = 0;
+        renderCalendar();
 
         renderPerfList('perfBySymbol', data.bySymbol, function(s) {
           return SYMBOL_LABELS[s] || s;
