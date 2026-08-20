@@ -6,6 +6,7 @@
 
 const memory = require('./memory');
 const { checkDashboardSecret } = require('./auth');
+const telegram = require('./telegram');
 
 const ALLOWED_SYMBOLS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100', '1HZ10V', '1HZ25V', '1HZ50V', '1HZ75V', '1HZ100V'];
 const ACCUMULATOR_GROWTH_RATES = [0.01, 0.02, 0.03, 0.04, 0.05]; // Deriv's allowed discrete growth rates
@@ -129,6 +130,7 @@ exports.handler = async function (event) {
         update.cooldownMinutes = parseInt(body.cooldownMinutes);
       }
       if (typeof body.cooldownEnabled === 'boolean') update.cooldownEnabled = body.cooldownEnabled;
+      if (typeof body.testModeEnabled === 'boolean') update.testModeEnabled = body.testModeEnabled;
 
       // Stake validation - a single trade shouldn't be able to eat more
       // than 20% of whatever the daily stop loss ends up being (using the
@@ -170,6 +172,13 @@ exports.handler = async function (event) {
 
       const saved = await memory.saveSettings(update);
       await memory.appendLog(saved.activeStrategy, `Settings updated: ${Object.keys(update).join(', ')}`, 'info');
+
+      // Safety-relevant, so alert on an actual flip either direction (not
+      // just on any settings save) - easy to lose track of a "temporary"
+      // test-mode toggle otherwise.
+      if ('testModeEnabled' in update && update.testModeEnabled !== current.testModeEnabled) {
+        await telegram.alertTestModeChanged(saved.activeStrategy, update.testModeEnabled);
+      }
 
       return respond({ settings: saved });
     }

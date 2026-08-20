@@ -20,6 +20,7 @@ exports.handler = async function () {
       headers: { 'Access-Control-Allow-Origin': '*' },
       body: JSON.stringify({
         activeStrategy: strategyName,
+        testModeEnabled: settings.testModeEnabled === true,
         running: !state.manualPause,
         manualPause: state.manualPause,
         cooldownPaused: state.paused,

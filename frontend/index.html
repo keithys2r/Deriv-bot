@@ -567,6 +567,7 @@
   <h1>BandzzBot</h1>
   <p class="subtitle" id="subtitleSymbol">ACCUMULATOR &middot; VOLATILITY 100 &middot; DEMO</p>
   <p class="account-banner demo" id="accountBanner" style="display:none;"></p>
+  <p class="account-banner live" id="testModeBanner" style="display:none;">⚠ TEST MODE — DAILY/WEEKLY LIMITS OFF</p>
   <p class="health-warning" id="healthWarning" style="display:none;"></p>
 
   <div class="balance-card">
@@ -727,6 +728,11 @@
       <label for="cooldownEnabledInput">Cooldown after consecutive losses - uncheck to disable entirely (bot keeps trading through loss streaks, no automatic pause)</label>
     </div>
 
+    <div class="checkbox-row" style="margin-top:12px;">
+      <input type="checkbox" id="testModeInput">
+      <label for="testModeInput" style="color:var(--red);">Test mode - IGNORES daily/weekly profit goal and daily stop loss, so a test run isn't cut short. Manual STOP and the loss-streak cooldown still work. Turn this off when you're done testing.</label>
+    </div>
+
     <button class="save-settings-btn" id="saveSettingsBtn">Save settings</button>
     <p class="settings-note" id="settingsNote"></p>
   </div>
@@ -875,6 +881,7 @@
     if (data.activeStrategy) selectedStrategy = data.activeStrategy;
     var strategyLabel = STRATEGY_LABELS[data.activeStrategy] || 'ACCUMULATOR';
     document.getElementById('subtitleSymbol').textContent = strategyLabel + ' \u00B7 DEMO';
+    updateTestModeBanner(data.testModeEnabled === true);
 
     var weeklyNote = document.getElementById('weeklyProgressNote');
     if (weeklyNote && currentSettings && currentSettings.weeklyProfitGoal) {
@@ -1012,6 +1019,10 @@
   // comes straight from balance.js's own auth response) - never guessed
   // or inferred client-side, since this is the one indicator that must
   // never be wrong about whether real money is on the line.
+  function updateTestModeBanner(enabled) {
+    document.getElementById('testModeBanner').style.display = enabled ? 'inline-block' : 'none';
+  }
+
   function renderAccountBanner(accountType) {
     var banner = document.getElementById('accountBanner');
     if (accountType === 'real') {
@@ -1076,6 +1087,8 @@
     document.getElementById('cooldownInput').value = settings.cooldownMinutes;
     document.getElementById('weeklyGoalInput').value = settings.weeklyProfitGoal || 100;
     document.getElementById('cooldownEnabledInput').checked = settings.cooldownEnabled !== false;
+    document.getElementById('testModeInput').checked = settings.testModeEnabled === true;
+    updateTestModeBanner(settings.testModeEnabled === true);
     document.getElementById('autoSelectInput').checked = settings.autoSelectSymbol === true;
 
     var symLabel = SYMBOL_LABELS[settings.symbol] || settings.symbol;
@@ -1322,6 +1335,7 @@
       cooldownMinutes: parseInt(document.getElementById('cooldownInput').value),
       weeklyProfitGoal: parseFloat(document.getElementById('weeklyGoalInput').value),
       cooldownEnabled: document.getElementById('cooldownEnabledInput').checked,
+      testModeEnabled: document.getElementById('testModeInput').checked,
       autoSelectSymbol: document.getElementById('autoSelectInput').checked,
       watchlist: Array.prototype.map.call(document.querySelectorAll('#watchlistGrid .symbol-chip.selected'), function(c) { return c.getAttribute('data-symbol'); })
     };

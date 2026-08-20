@@ -242,7 +242,11 @@ function defaultSettings() {
     weeklyProfitGoal: 100,
     maxConsecutiveLosses: 3,
     cooldownMinutes: 15,
-    cooldownEnabled: true
+    cooldownEnabled: true,
+    testModeEnabled: false // when true, risk.js skips dailyProfitGoal/weeklyProfitGoal/
+                            // dailyStopLoss so a testing run isn't cut short - manualPause
+                            // (STOP button) and the consecutive-loss cooldown still apply,
+                            // this only disables the "stop while ahead/behind" checks.
   };
 }
 
