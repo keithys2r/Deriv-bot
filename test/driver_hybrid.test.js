@@ -1,10 +1,28 @@
 // test/driver_hybrid.test.js
 // Exercises driver.js's pickHybridBucket - the pure ADX-to-strategy
-// routing decision behind runHybridStrategy. No I/O involved.
+// routing decision behind runHybridStrategy - and isDailyStakeLimitError,
+// the pure substring match behind the daily-stake-limit Telegram alert.
+// No I/O involved in either.
 
 const driver = require('../netlify/functions/driver');
 
 module.exports = {
+  'isDailyStakeLimitError: matches known Deriv rejection phrasings'(assert) {
+    assert.strictEqual(driver.isDailyStakeLimitError('You have reached the maximum daily stake limit for this contract type'), true);
+    assert.strictEqual(driver.isDailyStakeLimitError('Daily limit exceeded for this account'), true);
+    assert.strictEqual(driver.isDailyStakeLimitError('Maximum stake per trade is 100.00'), true);
+  },
+
+  'isDailyStakeLimitError: does not match unrelated rejections'(assert) {
+    assert.strictEqual(driver.isDailyStakeLimitError('Insufficient balance'), false);
+    assert.strictEqual(driver.isDailyStakeLimitError('This contract is not available for this symbol'), false);
+  },
+
+  'isDailyStakeLimitError: handles missing/empty input'(assert) {
+    assert.strictEqual(driver.isDailyStakeLimitError(undefined), false);
+    assert.strictEqual(driver.isDailyStakeLimitError(''), false);
+  },
+
   'pickHybridBucket: calm ADX picks accumulator'(assert) {
     const r = driver.pickHybridBucket(15, 20);
     assert.strictEqual(r.picked, 'accumulator');
