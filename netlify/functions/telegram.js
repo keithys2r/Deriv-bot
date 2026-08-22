@@ -107,6 +107,20 @@ async function alertStopLossHit(strategyName, loss) {
   return sendMessage(`${EMOJI_STOP} Daily stop loss hit\nStrategy: <b>${strategyName}</b>\nLoss: $${loss.toFixed(2)}`);
 }
 
+// Deriv itself (not this bot's own dailyStopLoss) enforces a daily cap
+// on total accumulator stake per account - a real business-rule
+// rejection, not a bug, and not something retrying fixes (see
+// driver.js's isDailyStakeLimitError). Distinguished from
+// alertStopLossHit since this is Deriv's limit, not the user's.
+async function alertDailyStakeLimitHit(strategyName, errorMessage) {
+  return sendMessage(
+    `${EMOJI_STOP} Deriv's daily accumulator stake limit hit\n` +
+    `Strategy: <b>${strategyName}</b>\n` +
+    `${errorMessage}\n` +
+    `This is Deriv's own limit, not your dailyStopLoss setting - trading on this strategy will resume once Deriv resets it.`
+  );
+}
+
 async function alertEODReport(strategyName, state) {
   const winRate = state.tradesToday > 0
     ? ((state.wins / state.tradesToday) * 100).toFixed(1)
@@ -157,6 +171,7 @@ module.exports = {
   alertDailyGoalHit,
   alertWeeklyGoalHit,
   alertStopLossHit,
+  alertDailyStakeLimitHit,
   alertEODReport,
   alertTradeResult,
   alertTestModeChanged

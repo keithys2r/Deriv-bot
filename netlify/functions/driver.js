@@ -336,6 +336,9 @@ async function runAccumulatorStrategy(token, app_id, settings, strategyName) {
     if (buyResult.definitelyNotPlaced) {
       // Deriv explicitly rejected the buy - nothing is open, safe to clear now.
       await memory.clearActiveTrade(STRATEGY_NAME);
+      if (isDailyStakeLimitError(buyResult.error)) {
+        await telegram.alertDailyStakeLimitHit(STRATEGY_NAME, buyResult.error);
+      }
     } else {
       // Timeout or WS error - genuinely unknown whether Deriv processed
       // the buy. Leave the marker; reconcileOrphanedTrade's grace period
@@ -1386,6 +1389,21 @@ function placeDigitDifferBatchAndWait(wsUrl, bets, onEachBought) {
   });
 }
 
+// Deriv enforces its own daily cap on total accumulator stake per
+// account, separate from this bot's own dailyStopLoss - a genuine
+// business-rule rejection (see the "API failure kill switch" note in
+// CLAUDE.md: this kind of rejection returns normally and deliberately
+// does NOT count toward that kill switch, since retrying wouldn't
+// help). Best-effort substring match since Deriv doesn't document an
+// error code for this - console.log still shows the raw message
+// either way, so a wording change just means this stops matching, not
+// that the event goes fully unnoticed.
+function isDailyStakeLimitError(errorMessage) {
+  if (!errorMessage) return false;
+  const msg = errorMessage.toLowerCase();
+  return msg.includes('stake limit') || msg.includes('daily limit') || (msg.includes('maximum') && msg.includes('stake'));
+}
+
 // Buys an accumulator and resolves as soon as the buy confirms - does
 // NOT wait for settlement like placeContractAndWait does, because an
 // accumulator can stay open far longer than a single invocation. The
@@ -1524,3 +1542,4 @@ async function forceSellAndWait(token, app_id, contractId, stake) {
 }
 
 module.exports.pickHybridBucket = pickHybridBucket;
+module.exports.isDailyStakeLimitError = isDailyStakeLimitError;
